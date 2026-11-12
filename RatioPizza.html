@@ -95,7 +95,7 @@ const uid=()=>Math.random().toString(36).slice(2,9);
 
 /* ---------- état et sauvegarde ---------- */
 let S=null, view='tableau', period='all', rec=null, banner=null, saveT=null, dbDoc=null;
-function blank(nom){return {nom,tva:10,seuil:10,volmin:20000,perte:4,cible:null,cad:{perso:0,loyer:0,energie:0,autres:0,verse:0},ings:[],recs:[],docs:[],sim:{}}}
+function blank(nom){return {nom,tva:10,seuil:10,volmin:20000,perte:4,cible:null,cad:{perso:0,loyer:0,energie:0,autres:0,emprunt:0,verse:0},var:{plat:0,com:0,cb:0},ings:[],recs:[],docs:[],sim:{}}}
 function load(){
   try{const r=localStorage.getItem('rp.v1');if(r){S=JSON.parse(r)}}catch(e){}
   if(!S||!S.clients){const id=uid();S={cur:id,t:0,clients:{[id]:JSON.parse(JSON.stringify(SEED))}}}
@@ -106,25 +106,35 @@ function save(){
   try{localStorage.setItem('rp.v1',JSON.stringify(S))}catch(e){}
   clearTimeout(saveT);saveT=setTimeout(async()=>{try{if(dbDoc)await dbDoc.set({json:JSON.stringify(S),t:S.t})}catch(e){}},900);
 }
+/* Garde la version remplacée (restauration, synchronisation) pour pouvoir revenir en arrière */
+function keepPrev(json,why){try{localStorage.setItem('rp.prev',JSON.stringify({t:Date.now(),why,json}))}catch(e){}}
+function getPrev(){try{const p=JSON.parse(localStorage.getItem('rp.prev')||'null');return p&&p.json?p:null}catch(e){return null}}
 async function initDb(){
   try{
     const user=await claude.use('user'),db=await claude.use('db');
     if(!user||!db)return;const id=await user.id();if(!id)return;
     dbDoc=db.doc('data/users/'+id+'/ratiopizza');
     const snap=await dbDoc.get();
-    if(snap.exists){const d=snap.data();if(d&&d.json&&d.t>(S.t||0)){S=JSON.parse(d.json);render();}}
+    if(snap.exists){const d=snap.data();if(d&&d.json&&d.t>(S.t||0)){const loc=JSON.stringify(S);if(S.t)keepPrev(loc,'synchronisation');S=JSON.parse(d.json);render();}}
     else await dbDoc.set({json:JSON.stringify(S),t:S.t||Date.now()});
   }catch(e){}
 }
 
 /* ---------- calculs ---------- */
-function cadre(d){const a=d.cad;return {tot:(+a.perso||0)+(+a.loyer||0)+(+a.energie||0)+(+a.autres||0)+(+a.verse||0)}}
+function cadre(d){const a=d.cad;return {tot:(+a.perso||0)+(+a.loyer||0)+(+a.energie||0)+(+a.autres||0)+(+a.emprunt||0)+(+a.verse||0)}}
+/* Frais proportionnels au CA : commissions des plateformes sur la part de CA qu'elles apportent, et frais de paiement */
+function varPct(d){const v=d.var||{};return (+v.plat||0)*(+v.com||0)/100+(+v.cb||0)}
 function monthsOf(d){return [...new Set(d.docs.map(x=>x.date.slice(0,7)))].sort()}
 /* Prix TTC d'une ligne de ventes : celui figé au moment de la vente (pu), sinon le prix actuel de la carte */
 function puOf(d,l){if(l.pu>0)return +l.pu;const r=d.recs.find(r=>r.nom===l.p);return r?+r.ttc||0:0}
 /* Avant tout changement de prix, fige l'ancien prix sur les ventes déjà enregistrées pour ne pas réécrire le passé */
 function figePrix(d,nom,prix){if(!(prix>0))return;d.docs.forEach(x=>{if(x.type==='vente')x.l.forEach(l=>{if(l.p===nom&&!(l.pu>0))l.pu=prix})})}
 function stampPu(d,lines){lines.forEach(l=>{const r=d.recs.find(r=>r.nom===l.p);if(r&&r.ttc>0)l.pu=r.ttc});return lines}
+/* Avant toute modification d'une recette, fige l'ancienne composition sur les ventes déjà enregistrées */
+function figeRecette(d,nom){const r=d.recs.find(r=>r.nom===nom);if(!r||!r.l.length)return;const snap=JSON.stringify(r.l.map(l=>({i:l.i,g:+l.g||0})));
+  d.docs.forEach(x=>{if(x.type==='vente')x.l.forEach(l=>{if(l.p===nom&&!l.rl)l.rl=JSON.parse(snap)})})}
+function editRecette(d,nom,fn){figeRecette(d,nom);fn(d.recs.find(r=>r.nom===nom))}
+function nbFiges(d,nom){let n=0;d.docs.forEach(x=>{if(x.type==='vente'&&x.l.some(l=>l.p===nom&&l.rl))n++});return n}
 function prevMonth(m){const [y,mo]=m.split('-').map(Number);return new Date(Date.UTC(y,mo-2,1)).toISOString().slice(0,7)}
 /* Variation de stock sur une suite de mois : stock début (fin du mois précédent) − stock fin. null si l'un manque */
 function stockAdj(d,ms){if(!ms.length||!d.stocks)return null;const s0=d.stocks[prevMonth(ms[0])],s1=d.stocks[ms[ms.length-1]];
@@ -136,13 +146,12 @@ function calc(d,per){
   const pizzas={};
   d.recs.forEach(r=>{let c=0;r.l.forEach(l=>{const i=ing[l.i];if(i)c+=l.g*costG(i)});const ht=r.ttc/hf;pizzas[r.nom]={nom:r.nom,ttc:r.ttc,ht,cost:c,ratio:ht?c/ht*100:null,marge:ht-c,lines:r.l}});
   const all=monthsOf(d);const ms=per==='all'?all:[per];
-  const V={},A={},CAp={};let nVentesDocs=0,nAchats=0;
+  const V={},A={},CAp={},theo={};let nVentesDocs=0,nAchats=0,ca=0,nPizzas=0,theoCost=0;
   d.docs.forEach(x=>{const m=x.date.slice(0,7);if(!ms.includes(m))return;
-    if(x.type==='vente'){nVentesDocs++;x.l.forEach(l=>{const q=+l.q||0;V[l.p]=(V[l.p]||0)+q;CAp[l.p]=(CAp[l.p]||0)+q*puOf(d,l)/hf})}
+    if(x.type==='vente'){nVentesDocs++;x.l.forEach(l=>{const q=+l.q||0;V[l.p]=(V[l.p]||0)+q;CAp[l.p]=(CAp[l.p]||0)+q*puOf(d,l)/hf;
+      const z=pizzas[l.p];if(!z)return;(l.rl||z.lines).forEach(rl=>{const i=ing[rl.i];if(!i)return;theoCost+=q*rl.g*costG(i);theo[rl.i]=(theo[rl.i]||0)+q*rl.g/(i.rend||1)})})}
     else{nAchats++;x.l.forEach(l=>{const a=A[l.i]||(A[l.i]={q:0,ht:0});a.q+=+l.q||0;a.ht+=+l.ht||0})}});
-  let ca=0,nPizzas=0,theoCost=0;const theo={};
-  Object.entries(V).forEach(([p,q])=>{const z=pizzas[p];if(!z)return;ca+=CAp[p]||0;nPizzas+=q;theoCost+=q*z.cost;
-    z.lines.forEach(l=>{const i=ing[l.i];if(!i)return;theo[l.i]=(theo[l.i]||0)+q*l.g/(i.rend||1)})});
+  Object.entries(V).forEach(([p,q])=>{const z=pizzas[p];if(!z)return;ca+=CAp[p]||0;nPizzas+=q});
   let achatsHT=0,horsRatio=0;Object.entries(A).forEach(([id,a])=>{if(ing[id]&&ing[id].hr)horsRatio+=a.ht;else achatsHT+=a.ht});
   const stk=stockAdj(d,ms),conso=achatsHT+(stk||0);
   const ecarts=d.ings.filter(i=>!i.hr).map(i=>{
@@ -166,10 +175,12 @@ function cible(d){
   const all=monthsOf(d);
   let tot=0,n=0;
   all.forEach(m=>{let s=0,has=false;d.docs.forEach(x=>{if(x.type==='vente'&&x.date.slice(0,7)===m){has=true;x.l.forEach(l=>{if(d.recs.some(r=>r.nom===l.p))s+=(+l.q||0)*puOf(d,l)/(1+d.tva/100)})}});if(has){tot+=s;n++}});
-  const ann=n?tot/n*12:0,ch=cadre(d).tot*12;
-  const calc=ann&&ch?100-ch/ann*100:null;
-  const val=d.cible!=null&&d.cible!==''?+d.cible:(calc!=null?calc:28);
-  return {ann,ch,calc,val,src:d.cible!=null&&d.cible!==''?'saisie':(calc!=null?'calcul':'défaut 28 %')}
+  const ann=n?tot/n*12:0,ch=cadre(d).tot*12,vp=varPct(d);
+  const calc=ann&&(ch||vp)?100-ch/ann*100-vp:null;
+  const saisie=d.cible!=null&&d.cible!=='';
+  const irreal=calc!=null&&calc<=0;
+  const val=saisie?+d.cible:(calc!=null&&!irreal?calc:28);
+  return {ann,ch,vp,calc,val,irreal,src:saisie?'saisie':(calc!=null&&!irreal?'calcul':'défaut 28 %')}
 }
 function objectif(d){const c=cible(d);return d.objectif>0?{v:+d.objectif,src:'objectif convenu'}:{v:c.val,src:'cible'}}
 function snapshot(d){const c=cible(d);return {m:monthsOf(d).map(m=>{const r=calc(d,m);return [m,r.ratioReel,r.ca]}),c:c.val}}
@@ -201,7 +212,7 @@ function vTableau(){
   let mz='';
   if(mozId){const lab=all.map(mlab),vals=rm.map(x=>x.nPizzas?(x.A[mozId]?x.A[mozId].q*x.ing[mozId].g:0)/x.nPizzas:null),tg=rm.map(x=>x.nPizzas?(x.ecarts.find(e=>e.i.id===mozId).t)/x.nPizzas:null).filter(v=>v!=null);
     mz=`<div class="card"><div class="sec"><h3>${esc(d.ings.find(i=>i.id===mozId).nom)} achetée par pizza vendue</h3><span class="small mut">grammes</span></div>${bars(lab,vals,tg.length?tg.reduce((a,b)=>a+b,0)/tg.length:null,'g',{dec:0,tl:'théorie',al:'Grammes achetés par pizza'})}<p class="small mut">Le suivi le plus lisible pour le patron : si la barre redescend vers la ligne, la portion est mieux tenue.</p></div>`}
-  const alerts=[];qualite(d).slice(0,4).forEach(q=>alerts.push([q.lvl,'Qualité des données',q.txt]));
+  const alerts=[];if(c.irreal)alerts.push(['bd','Cible impossible','Les charges saisies dépassent le chiffre d\'affaires : la cible par défaut de 28 % est utilisée. Revois le Cadrage.']);qualite(d).slice(0,4).forEach(q=>alerts.push([q.lvl,'Qualité des données',q.txt]));
   ec.slice(0,4).forEach(e=>alerts.push(['bd','Surconsommation',`${e.i.nom} : ${pc(e.ec)} d'achats au-dessus de la théorie, soit environ ${eur(e.val)} sur la période.`]));
   above.slice(0,3).forEach(z=>alerts.push(['wn','Pizza au-dessus de la cible',`${z.nom} : ratio réel estimé ${pc(z.ratioR)} pour une cible de ${pc(c.val)}.`]));
   drifts(d).slice(0,3).forEach(x=>alerts.push(['wn','Hausse de prix',`${x.nom} : ${x.pct>0?'+':''}${fmt(x.pct,1)} % entre ${mlab(x.m0)} et ${mlab(x.m1)}.`]));
@@ -291,6 +302,7 @@ function vFiches(){
    ${R.l.map((l,k)=>{const i=ing[l.i];const cg=i?i.prix/(i.g*(i.rend||1)):0;const e=i?r.em[i.id]:null;return `<tr><td><select data-ls="${k}">${ingOpts(l.i)}</select></td><td class="n"><input class="n" type="number" step="any" data-lg="${k}" value="${l.g}"></td><td class="n"><input class="n" type="number" step="any" data-lp="${k}" value="${l.pes||''}" placeholder="–"></td><td class="n">${fmt(l.g*cg,3)} €</td><td class="n">${fmt((l.pes>0?l.pes:l.g*(1+(e?e.sur:0)))*cg,3)} €</td><td><button class="x" data-lx="${k}">Retirer</button></td></tr>`}).join('')}
    </tbody><tfoot><tr><th>Total</th><th></th><th></th><th class="n">${fmt(z.cost,2)} €</th><th class="n">${fmt(z.costR,2)} €</th><th></th></tr></tfoot></table></div>
    <button class="g" id="ladd" style="margin-top:8px">Ajouter un ingrédient</button>
+   ${nbFiges(d,z.nom)?`<div class="note" style="margin-top:10px">${nbFiges(d,z.nom)} relevé(s) de ventes passés gardent la recette en vigueur au moment de la vente : modifier cette fiche ne change pas leurs chiffres. S'il s'agissait d'une erreur de saisie et non d'un vrai changement de recette, <button class="g" id="rpast">appliquer la recette actuelle aux ventes passées</button>.</div>`:''}
    <div class="grid" style="margin-top:14px">
     <div class="kpi"><div class="l">Ratio théorique</div><div class="v">${pc(z.ratio)}</div></div>
     <div class="kpi"><div class="l">Ratio réel estimé</div><div class="v ${z.ratioR>c.val?'bad':'good'}">${pc(z.ratioR)}</div><div class="s">cible ${pc(c.val)}</div></div>
@@ -349,13 +361,17 @@ function vSimulation(){
 
 function vCadrage(){
   const d=D(),c=cible(d),a=d.cad;
-  const f=(k,l)=>`<tr><td><label for="c_${k}">${l}</label></td><td class="n"><input class="n" id="c_${k}" type="number" step="10" data-cad="${k}" value="${a[k]}"></td><td class="n">${c.ann?pc(a[k]*12/c.ann*100):'–'}</td></tr>`;
+  const f=(k,l)=>`<tr><td style="white-space:normal"><label for="c_${k}">${l}</label></td><td class="n"><input class="n" id="c_${k}" type="number" step="10" data-cad="${k}" value="${a[k]??0}"></td><td class="n">${c.ann?pc((+a[k]||0)*12/c.ann*100):'–'}</td></tr>`;
+  const v=d.var||{},g=(k,l,h)=>`<tr><td style="white-space:normal"><label for="v_${k}">${l}</label><div class="small mut">${h}</div></td><td class="n"><input class="n" id="v_${k}" type="number" step="0.5" min="0" max="100" data-var="${k}" value="${v[k]??0}"> %</td></tr>`;
   return `<h2>Cadrage de la cible</h2>
-  <div class="grid2"><div class="card"><div class="sec"><h3>Charges mensuelles hors matière</h3></div><div class="tw"><table><thead><tr><th>Poste</th><th class="n">€ par mois</th><th class="n">% du CA HT annuel</th></tr></thead><tbody>${f('perso','Personnel, charges comprises')}${f('loyer','Loyer')}${f('energie','Énergie')}${f('autres','Autres frais')}${f('verse','Rémunération souhaitée du patron')}</tbody></table></div></div>
+  <div class="grid2"><div class="card"><div class="sec"><h3>Charges mensuelles hors matière</h3></div><div class="tw"><table><thead><tr><th>Poste</th><th class="n">€ par mois</th><th class="n">% du CA HT annuel</th></tr></thead><tbody>${f('perso','Personnel, charges comprises')}${f('loyer','Loyer')}${f('energie','Énergie')}${f('autres','Autres frais')}${f('emprunt','Remboursement d\'emprunts (capital + intérêts)')}${f('verse','Rémunération souhaitée du patron, charges sociales comprises')}</tbody></table></div>
+  <div class="sec" style="margin-top:14px"><h3>Frais proportionnels aux ventes</h3><span class="small mut">${pc(c.vp)} du CA</span></div><div class="tw"><table><tbody>${g('plat','Part du CA via plateformes de livraison','Uber Eats, Deliveroo… en % du CA total')}${g('com','Commission des plateformes','souvent 25 à 35 % des ventes qu\'elles apportent')}${g('cb','Frais de paiement (carte, titres-restaurant)','souvent 0,5 à 1,5 % du CA')}</tbody></table></div></div>
   <div class="card"><div class="sec"><h3>Résultat</h3></div><div class="list">
    <div class="item"><span>CA HT annualisé (moyenne des mois avec ventes × 12) :</span><b>${eur(c.ann)}</b></div>
    <div class="item"><span>Charges hors matière sur l'année :</span><b>${eur(c.ch)}</b></div>
-   <div class="item"><span>Cible calculée (100 % − charges en %) :</span><b>${c.calc!=null?pc(c.calc):'à renseigner'}</b></div>
+   <div class="item"><span>Frais proportionnels :</span><b>${pc(c.vp)} du CA</b></div>
+   <div class="item"><span>Cible calculée (100 % − charges en % − frais proportionnels) :</span><b class="${c.irreal?'bad':''}">${c.calc!=null?pc(c.calc):'à renseigner'}</b></div>
+   ${c.irreal?`<div class="note"><b>Les charges dépassent ce que le chiffre d'affaires permet.</b> Même avec des ingrédients gratuits, le restaurant ne couvrirait pas ses charges et la rémunération souhaitée. La cible par défaut de 28 % est utilisée en attendant : revois les charges, la rémunération ou le CA avec le patron.</div>`:(c.calc!=null&&c.calc<15?`<div class="note">Cible très basse (${pc(c.calc)}) : peu réaliste pour une pizzeria. Vérifie les charges saisies.</div>`:'')}
    <div><label class="small mut" for="co">Cible retenue (laisser vide pour utiliser le calcul)</label><br><input class="n" id="co" type="number" step="0.5" value="${d.cible??''}"> %</div>
    <div class="item"><span>Cible utilisée dans tout le logiciel :</span><b>${pc(c.val)}</b></div>
    <div><label class="small mut" for="ob">Objectif de ratio convenu avec le patron (laisser vide = la cible)</label><br><input class="n" id="ob" type="number" step="0.5" value="${d.objectif??''}"> %</div></div>
@@ -364,7 +380,7 @@ function vCadrage(){
 
 function vDonnees(){
   const d=D();
-  return `<h2>Ingrédients et données</h2>
+  return `${banner?`<div class="banner" role="status">${banner}</div>`:''}<h2>Ingrédients et données</h2>
   <div class="card"><div class="sec"><h3>Ingrédients et prix de référence</h3><button class="g" id="iadd">Ajouter un ingrédient</button></div><div class="tw"><table><thead><tr><th>Ingrédient</th><th>Unité fournisseur</th><th class="n">Contenu utile (g, ml, pièces)</th><th class="n">Prix HT / unité</th><th class="n">Rendement %</th><th class="n">Coût net / kg</th><th>Hors ratio</th><th></th></tr></thead><tbody>
   ${d.ings.map(i=>`<tr><td><input class="w" data-i="${i.id}" data-f="nom" value="${esc(i.nom)}">${i.prov?'<div class="ex">Prix à compléter : dépose une facture</div>':''}${ingFlags(i).map(t=>`<div class="ex">${esc(t)}</div>`).join('')}</td><td><input style="width:80px" data-i="${i.id}" data-f="unite" value="${esc(i.unite)}"></td><td class="n"><input class="n" type="number" data-i="${i.id}" data-f="g" value="${i.g}"></td><td class="n"><input class="n" type="number" step="0.01" data-i="${i.id}" data-f="prix" value="${i.prix}"></td><td class="n"><input class="n" type="number" data-i="${i.id}" data-f="rend" value="${Math.round((i.rend||1)*100)}"></td><td class="n">${fmt(i.prix/(i.g*(i.rend||1))*1000)} €</td><td><input type="checkbox" data-i="${i.id}" data-f="hr" ${i.hr?'checked':''} aria-label="${esc(i.nom)} hors ratio"></td><td><button class="x" data-idel="${i.id}">Supprimer</button></td></tr>`).join('')}
   </tbody></table></div><p class="small mut">Le rendement s'applique au poids brut (poivrons 85 %, oignons 90 %). Pour des champignons égouttés, saisis le poids égoutté comme contenu. Ne divise jamais le prix par la quantité commandée.</p><p class="small mut">Hors ratio : article acheté mais qui n'entre pas dans les pizzas (boissons, desserts, produits d'entretien). Il reste visible sur les factures mais n'est compté ni dans le ratio matière ni dans les écarts.</p><p class="ex" id="ierr"></p></div>
@@ -377,11 +393,32 @@ function vDonnees(){
   <div class="card"><div class="sec"><h3>Mon activité</h3></div><p class="small mut">Affiché en en-tête du bilan PDF.</p><div class="list"><div><label class="small mut" for="pro_nom">Nom de l'activité</label><br><input class="w" id="pro_nom" value="${esc((S.pro||{}).nom||'')}"></div><div><label class="small mut" for="pro_ct">Coordonnées (téléphone, e-mail)</label><br><input class="w" id="pro_ct" value="${esc((S.pro||{}).ct||'')}"></div></div></div>
   <div class="card"><div class="sec"><h3>Sauvegarde</h3></div><p class="small mut">Les données sont gardées dans ce navigateur${dbDoc?' et dans ton espace privé de la page':''}. Copie la sauvegarde pour la conserver ailleurs.</p>
    <textarea id="exp" rows="3" readonly>${esc(JSON.stringify(S))}</textarea><div class="row" style="margin-top:6px"><button class="g" id="cpx">Copier la sauvegarde</button></div>
-   <label class="small mut" for="imp">Restaurer : colle une sauvegarde</label><textarea id="imp" rows="2"></textarea><div class="row" style="margin-top:6px"><button class="g" id="impb">Restaurer</button><button class="g" id="delcl">Supprimer ce client</button></div><p class="ex" id="serr"></p></div></div>`
+   <label class="small mut" for="imp">Restaurer : colle une sauvegarde</label><textarea id="imp" rows="2"></textarea><div class="row" style="margin-top:6px"><button class="g" id="impb">Restaurer</button><button class="g" id="delcl">Supprimer ce client</button></div><p class="ex" id="serr"></p>
+   ${(()=>{const p=getPrev();return p?`<div class="note" style="margin-top:8px">Version remplacée le ${new Date(p.t).toLocaleString('fr-FR')} (${esc(p.why)}) conservée dans ce navigateur. <button class="g" id="undo">Revenir à cette version</button></div>`:''})()}</div></div>`
 }
 
 /* ---------- rendu et événements ---------- */
+/* Le rendu remplace tout le HTML : on retient le champ actif, sa sélection et les défilements internes pour les rétablir */
+function focusKey(a){
+  if(!a||a===document.body||!a.closest||!a.closest('#main,header'))return null;
+  if(a.id)return '#'+CSS.escape(a.id);
+  const ds=Object.entries(a.dataset);if(!ds.length)return null;
+  return a.tagName.toLowerCase()+ds.map(([k,v])=>`[data-${k.replace(/[A-Z]/g,c=>'-'+c.toLowerCase())}="${CSS.escape(v)}"]`).join('')}
 function render(){
+  /* Pendant un événement « change » (Tab ou clic ailleurs), le navigateur n'a pas encore déplacé le curseur :
+     on redessine juste après, pour retrouver le champ où il est allé */
+  if(window.event&&window.event.type==='change'){clearTimeout(render.t);render.t=setTimeout(render,0);return}
+  clearTimeout(render.t);
+  const a=document.activeElement,key=focusKey(a),sel=a&&key?(()=>{try{return [a.selectionStart,a.selectionEnd]}catch(e){return null}})():null;
+  const box=[...document.querySelectorAll('#main .pz,#main .tw')].map(e=>[e.scrollTop,e.scrollLeft]),sy=window.scrollY,same=render.v===view;
+  render0();render.v=view;
+  if(!same)return;
+  document.querySelectorAll('#main .pz,#main .tw').forEach((e,k)=>{if(box[k]){e.scrollTop=box[k][0];e.scrollLeft=box[k][1]}});
+  if(Math.abs(window.scrollY-sy)>1)window.scrollTo(0,sy);
+  if(key){let n=null;try{n=document.querySelector(key)}catch(e){}
+    if(n&&n!==document.activeElement){n.focus({preventScroll:true});if(sel&&sel[0]!=null)try{n.setSelectionRange(sel[0],sel[1])}catch(e){}}}
+}
+function render0(){
   const cl=$('#cl');cl.innerHTML=Object.entries(S.clients).map(([k,v])=>`<option value="${k}" ${k===S.cur?'selected':''}>${esc(v.nom)}</option>`).join('');
   $('#tabs').innerHTML=TABS.map(([k,l])=>`<a href="#${k}" class="${k===view?'on':''}">${l}</a>`).join('');
   const f={tableau:vTableau,documents:vDocuments,fiches:vFiches,ecarts:vEcarts,pesees:vPesees,historique:vHistorique,simulation:vSimulation,cadrage:vCadrage,donnees:vDonnees,guide:vGuide}[view]||vTableau;
@@ -483,8 +520,8 @@ function draftHtml(x){
     const blocks=k.pizzas.map((p,a)=>{const ex=findPz(d,p.nom);return `<div class="card" style="padding:10px"><div class="row"><input data-dr="${x.id}" data-drpz="${a}" data-drpc="nom" value="${esc(p.nom)}"><label class="small mut">Prix TTC</label><input class="n" type="number" step="0.1" data-dr="${x.id}" data-drpz="${a}" data-drpc="ttc" value="${p.ttc||''}"><span class="small mut">${ex?'Pizza existante : '+(p.lines.length?'recette remplacée':'prix mis à jour')+(ex.ttc!==p.ttc&&p.ttc?' (prix actuel '+fmt(ex.ttc)+' €)':''):'Nouvelle pizza'}</span><button class="x" data-dr="${x.id}" data-drpx="${a}">Retirer la pizza</button></div>
     ${p.lines.length?`<div class="tw"><table><thead><tr><th>Lu</th><th>Ingrédient</th><th class="n">Déclaré</th><th class="n">Pesé</th><th></th></tr></thead><tbody>${p.lines.map((l,b)=>`<tr><td class="small mut">${esc(l.label)}</td><td><select data-dr="${x.id}" data-drpz="${a}" data-drpl="${b}" data-drpc="i">${io(l.i)}</select></td><td class="n"><input class="n" type="number" step="any" data-dr="${x.id}" data-drpz="${a}" data-drpl="${b}" data-drpc="g" value="${l.g||''}"></td><td class="n"><input class="n" type="number" step="any" data-dr="${x.id}" data-drpz="${a}" data-drpl="${b}" data-drpc="pes" value="${l.pes||''}" placeholder="–"></td><td>${l.i&&l.g>0?pill('ok','OK'):pill('bd','À compléter')}</td></tr>`).join('')}</tbody></table></div>`:''}</div>`}).join('');
     return `<div class="draft"><div class="row"><b>${esc(x.name)}</b>${pill('nt','Carte, recettes ou pesées à vérifier')}</div>${blocks}${x.err?`<p class="ex">${esc(x.err)}</p>`:''}<div class="row"><button data-drrok="${x.id}">Appliquer aux fiches techniques</button><button class="x" data-drx="${x.id}">Ignorer</button></div></div>`}
-  if(k.type==='cadrage'){const lab={perso:'Personnel, charges comprises',loyer:'Loyer',energie:'Énergie',autres:'Autres frais',verse:'Rémunération souhaitée du patron'};
-    return `<div class="draft"><div class="row"><b>${esc(x.name)}</b>${pill('nt','Fiche de cadrage à vérifier')}</div><div class="tw"><table><thead><tr><th>Poste</th><th class="n">€ par mois</th><th class="n">Actuellement</th></tr></thead><tbody>${Object.keys(lab).map(f=>`<tr><td>${lab[f]}</td><td class="n"><input class="n" type="number" step="10" data-dr="${x.id}" data-drcad="${f}" value="${k.cad[f]}"></td><td class="n mut">${eur(D().cad[f])}</td></tr>`).join('')}</tbody></table></div><div class="row"><button data-drcadok="${x.id}">Appliquer au cadrage</button><button class="x" data-drx="${x.id}">Ignorer</button></div></div>`}
+  if(k.type==='cadrage'){const lab={perso:'Personnel, charges comprises',loyer:'Loyer',energie:'Énergie',autres:'Autres frais',emprunt:'Remboursement d\'emprunts',verse:'Rémunération souhaitée du patron'};
+    return `<div class="draft"><div class="row"><b>${esc(x.name)}</b>${pill('nt','Fiche de cadrage à vérifier')}</div><div class="tw"><table><thead><tr><th>Poste</th><th class="n">€ par mois</th><th class="n">Actuellement</th></tr></thead><tbody>${Object.keys(lab).map(f=>`<tr><td>${lab[f]}</td><td class="n"><input class="n" type="number" step="10" data-dr="${x.id}" data-drcad="${f}" value="${k.cad[f]}"></td><td class="n mut">${eur(D().cad[f]||0)}</td></tr>`).join('')}</tbody></table></div><div class="row"><button data-drcadok="${x.id}">Appliquer au cadrage</button><button class="x" data-drx="${x.id}">Ignorer</button></div></div>`}
   const sum=k.lines.reduce((a,l)=>a+(+l.ht||0),0);
   const dup=d.docs.some(o=>o.type===k.type&&o.ref&&o.ref===k.ref&&(o.fourn===k.fourn||!isA));
   const iopts=sel=>`<option value="">— choisir —</option><option value="__new" ${sel==='__new'?'selected':''}>➕ Nouvel ingrédient</option>`+d.ings.map(i=>`<option value="${i.id}" ${i.id===sel?'selected':''}>${esc(i.nom)} (${esc(i.unite)})</option>`).join('');
@@ -551,14 +588,14 @@ Ingrédients connus (id | nom | unité de facturation | contenu utile par unité
 ${d.ings.length?d.ings.map(i=>`${i.id} | ${i.nom} | ${i.unite} | ${i.g}`).join('\n'):'(aucun pour l\'instant)'}
 Pizzas connues : ${d.recs.length?d.recs.map(r=>r.nom).join(', '):'(aucune pour l\'instant)'}
 Format : {"documents":[{"type":"achat" ou "vente" ou "inconnu","date":"AAAA-MM-JJ" ou null,"ref":"numéro de facture ou titre","fourn":"nom du fournisseur","total_ht":nombre ou null,"lignes":[{"libelle":"texte lu","ingredient_id":"id connu ou null","pizza":"nom exact connu ou null","quantite":nombre,"montant_ht":nombre ou null,"nom_ingredient":"nom court de l'ingrédient (ex. Mozzarella râpée)","unite":"unité de facturation (carton, kg, sac, boîte, seau, bidon…)","contenu_par_unite":nombre de g, ml ou pièces utilisables par unité, déduit de la désignation (carton de 4 sachets de 2,5 kg = 10000 ; kg vendu au poids réel = 1000 ; carton de 100 boîtes = 100) ou null,"tva":taux en % ou null,"hors_ratio":true si l'article n'entre pas dans la fabrication des pizzas (boisson, dessert, produit d'entretien), sinon false}]}]}
-Règles : renvoie un document par facture (un fichier peut en contenir plusieurs), et un document de type vente par mois pour un relevé de ventes couvrant plusieurs mois (date = dernier jour du mois). Une facture fournisseur est de type achat. La quantité est le nombre d'unités facturées (cartons, sacs, boîtes, seaux, ou kilos pour un produit vendu au poids réel). montant_ht est le total HT de la ligne, jamais le prix unitaire ni un montant TTC. Ignore port, remise globale, TVA et totaux. Un rapport de caisse ou de ventes est de type vente : quantité vendue par pizza, ignore boissons et desserts. Une fiche de cadrage (charges mensuelles du patron) est de type cadrage, sans lignes, avec "cadrage":{"personnel":nombre,"loyer":nombre,"energie":nombre,"autres":nombre,"remuneration":nombre} en euros par mois (remuneration = ce que le patron veut se verser). Une carte (liste de pizzas avec prix TTC), des recettes ou une fiche de pesée sont de type recettes, avec "pizzas":[{"nom":"nom de la pizza","prix_ttc":nombre ou null,"a_la_carte_depuis":"AAAA-MM-JJ" ou null (date de mise à la carte si le document la donne),"lignes":[{"libelle":"texte lu","ingredient_id":"id connu ou null","declare":grammage déclaré ou null,"pese":grammage pesé ou null}]}] et sans clé lignes au niveau du document ; une carte sans composition donne des pizzas avec lignes vides ; mets pese à null si la pesée n'a pas été faite ; les grammages sont en g, ml ou pièces comme dans le document. Un index ou récapitulatif de factures (une ligne par facture : numéro, date, fournisseur, total HT, sans le détail des lignes) est de type index, sans lignes, avec "factures":[{"ref":"numéro de facture","date":"AAAA-MM-JJ","fourn":"fournisseur","total_ht":nombre ou null}]. Si le fichier est autre chose, renvoie {"documents":[]}. Pour un achat, remplis toujours nom_ingredient, unite, contenu_par_unite et tva à partir de la facture, même si l'ingrédient n'est pas dans la liste connue (ingredient_id est alors null). Pour les autres champs, ne devine pas : mets null si aucun ingrédient ou aucune pizza connue ne correspond clairement. Format de date ISO.
+Règles : renvoie un document par facture (un fichier peut en contenir plusieurs), et un document de type vente par mois pour un relevé de ventes couvrant plusieurs mois (date = dernier jour du mois). Une facture fournisseur est de type achat. La quantité est le nombre d'unités facturées (cartons, sacs, boîtes, seaux, ou kilos pour un produit vendu au poids réel). montant_ht est le total HT de la ligne, jamais le prix unitaire ni un montant TTC. Ignore port, remise globale, TVA et totaux. Un rapport de caisse ou de ventes est de type vente : quantité vendue par pizza, ignore boissons et desserts. Une fiche de cadrage (charges mensuelles du patron) est de type cadrage, sans lignes, avec "cadrage":{"personnel":nombre,"loyer":nombre,"energie":nombre,"autres":nombre,"emprunt":nombre ou null,"remuneration":nombre} en euros par mois (remuneration = ce que le patron veut se verser). Une carte (liste de pizzas avec prix TTC), des recettes ou une fiche de pesée sont de type recettes, avec "pizzas":[{"nom":"nom de la pizza","prix_ttc":nombre ou null,"a_la_carte_depuis":"AAAA-MM-JJ" ou null (date de mise à la carte si le document la donne),"lignes":[{"libelle":"texte lu","ingredient_id":"id connu ou null","declare":grammage déclaré ou null,"pese":grammage pesé ou null}]}] et sans clé lignes au niveau du document ; une carte sans composition donne des pizzas avec lignes vides ; mets pese à null si la pesée n'a pas été faite ; les grammages sont en g, ml ou pièces comme dans le document. Un index ou récapitulatif de factures (une ligne par facture : numéro, date, fournisseur, total HT, sans le détail des lignes) est de type index, sans lignes, avec "factures":[{"ref":"numéro de facture","date":"AAAA-MM-JJ","fourn":"fournisseur","total_ht":nombre ou null}]. Si le fichier est autre chose, renvoie {"documents":[]}. Pour un achat, remplis toujours nom_ingredient, unite, contenu_par_unite et tva à partir de la facture, même si l'ingrédient n'est pas dans la liste connue (ingredient_id est alors null). Pour les autres champs, ne devine pas : mets null si aucun ingrédient ou aucune pizza connue ne correspond clairement. Format de date ISO.
 ${text?'Texte du document :\n'+text:'Le document est fourni en image.'}`;
   const o=await sample.json(prompt,{images:images.length?images:undefined,modelTier:'default',cache:false});
   const docs=Array.isArray(o)?o:(Array.isArray(o.documents)?o.documents:(o.lignes?[o]:[]));
   const out=[];
   docs.forEach(o=>{if(o.type==='index'&&Array.isArray(o.factures)){const fl=o.factures.filter(f=>f&&f.ref).map(f=>({ref:String(f.ref),date:/^\d{4}-\d{2}-\d{2}$/.test(f.date||'')?f.date:'',fourn:String(f.fourn||''),ht:f.total_ht!=null?+f.total_ht:null}));if(fl.length)out.push({doc:{type:'index',factures:fl},note:''});return}
     if(o.type==='recettes'&&Array.isArray(o.pizzas)){const pz=o.pizzas.filter(p=>p&&p.nom).map(p=>({nom:String(p.nom),ttc:+p.prix_ttc||0,since:/^\d{4}-\d{2}-\d{2}$/.test(p.a_la_carte_depuis||'')?p.a_la_carte_depuis:'',lines:(Array.isArray(p.lignes)?p.lignes:[]).map(l=>{const lab=String(l.libelle||'');const i=d.ings.find(z=>z.id===l.ingredient_id)||findIng(d,lab);return {label:lab,i:i?i.id:(lab?'__new':''),g:+l.declare||(+l.pese||0),pes:+l.pese||0}})}));if(pz.length)out.push({doc:{type:'recettes',pizzas:pz},note:''});return}
-    if(o.type==='cadrage'&&o.cadrage){const c=o.cadrage,n=v=>Math.round(+v||0);out.push({doc:{type:'cadrage',cad:{perso:n(c.personnel),loyer:n(c.loyer),energie:n(c.energie),autres:n(c.autres),verse:n(c.remuneration)}},note:''});return}
+    if(o.type==='cadrage'&&o.cadrage){const c=o.cadrage,n=v=>Math.round(+v||0);out.push({doc:{type:'cadrage',cad:{perso:n(c.personnel),loyer:n(c.loyer),energie:n(c.energie),autres:n(c.autres),emprunt:n(c.emprunt),verse:n(c.remuneration)}},note:''});return}
     const lg=Array.isArray(o.lignes)?o.lignes:[];if(!lg.length)return;
     let type=o.type,note='';
     if(type!=='achat'&&type!=='vente'){type=lg.some(l=>l.montant_ht!=null)?'achat':'vente';note='Type de document incertain, vérifie-le.'}
@@ -685,7 +722,7 @@ function vGuide(){
    {t:'Rendement',k:'rendement perte épluchage brut net',def:'La part d\'un produit brut qui reste utilisable après épluchage, parage ou égouttage. Il sert à ne pas sous-estimer ce qu\'il faut acheter.',f:'Quantité à acheter = grammage de la recette ÷ rendement',ex:'Une pizza demande 40 g de poivron coupé. Avec un rendement de 85 %, il faut acheter 40 ÷ 0,85 = 47 g de poivron brut. Pour un produit déjà prêt (mozzarella râpée, boîte de champignons égouttés), le rendement est 100 %.',live:rd?`Ton client : ${rd.nom} a un rendement de ${fmt((rd.rend||1)*100,0)} %.`:''},
    {t:'Coût d\'une pizza (fiche technique)',k:'fiche technique recette cout theorique',def:'La somme du coût de chaque ingrédient de la recette, pour une pizza. C\'est le coût théorique : il suppose que la recette est respectée au gramme.',f:'Coût = somme (grammage de la ligne × coût net au gramme)',ex:'Margherita : sauce 80 g, mozzarella 100 g, farine 160 g, huile 5 g, une boîte. Environ 0,13 + 0,62 + 0,14 + 0,03 + 0,24 = 1,16 €. Avec 9,09 € HT de prix de vente, le ratio est 12,8 %.',live:''},
    {t:'Coût réel estimé',k:'cout reel surconsommation pesee',def:'Le coût d\'une pizza tel qu\'il est vraiment, quand le cuisinier met plus que la recette. Le logiciel part du coût théorique et le corrige avec la pesée si elle existe, sinon avec la surconsommation constatée sur les achats.',f:'Coût réel = somme (grammage pesé, ou grammage déclaré × (1 + surconsommation)) × coût net au g',ex:'La recette dit 100 g de mozzarella mais la pesée donne 118 g : la ligne coûte 0,73 € au lieu de 0,62 €. Sur 5 000 pizzas par an, 0,11 € de plus par pizza représente environ 550 €.',live:''},
-   {t:'Cible de ratio',k:'cible objectif charges',def:'Le ratio matière maximum que le restaurant peut se permettre pour payer toutes ses charges et rémunérer le patron comme il le souhaite. On la calcule en partant de la fin.',f:'Cible = 100 % − (charges mensuelles hors matière × 12 ÷ CA HT annuel × 100)',ex:'CA HT annuel de 146 500 €. Charges hors matière 9 030 € par mois (personnel 5 200, loyer 700, énergie 450, autres frais 880, rémunération du patron 1 800) soit 108 360 € par an, donc 74 % du CA. Cible = 100 − 74 = 26 %. Au-dessus, le patron ne se paie pas comme prévu.',live:`Ton client : cible ${pc(c.val)} (${c.src}).${o.src!=='cible'?' Objectif convenu : '+pc(o.v)+'.':''}`},
+   {t:'Cible de ratio',k:'cible objectif charges',def:'Le ratio matière maximum que le restaurant peut se permettre pour payer toutes ses charges et rémunérer le patron comme il le souhaite. On la calcule en partant de la fin.',f:'Cible = 100 % − (charges mensuelles hors matière × 12 ÷ CA HT annuel × 100) − frais proportionnels (commissions des plateformes, frais de paiement)',ex:'CA HT annuel de 146 500 €. Charges hors matière 9 030 € par mois (personnel 5 200, loyer 700, énergie 450, autres frais 880, rémunération du patron 1 800) soit 108 360 € par an, donc 74 % du CA. Cible = 100 − 74 = 26 %. Au-dessus, le patron ne se paie pas comme prévu.',live:`Ton client : cible ${pc(c.val)} (${c.src}).${o.src!=='cible'?' Objectif convenu : '+pc(o.v)+'.':''}`},
    {t:'Écart à la cible',k:'ecart cible negatif positif',def:'La différence entre le ratio d\'une pizza (ou du restaurant) et la cible. C\'est le signal : positif, la pizza mange trop de marge ; négatif, elle respecte le budget.',f:'Écart = ratio − cible',ex:'Cible 26 %. Une pizza à 27,4 % : écart de +1,4 point, à corriger (prix ou grammage). Une pizza à 14 % : écart de −12 points, elle est très rentable et peut financer les autres.',live:''},
    {t:'Ratio théorique',k:'ratio theorique recettes ventes',def:'Le ratio que le restaurant devrait avoir si chaque pizza était faite exactement selon sa recette, sans perte ni gaspillage.',f:'Ratio théorique = somme (pizzas vendues × coût de la recette) ÷ CA HT × 100',ex:'1 000 pizzas vendues à 11 € HT de moyenne = 11 000 € de CA. Les recettes coûtent 1 900 € au total : ratio théorique 17,3 %.',live:has?`Ton client : ${eur(r.theoCost)} ÷ ${eur(r.ca)} = ${pc(r.ratioTheo)}.`:''},
    {t:'Ratio réel',k:'ratio reel achats',def:'Le ratio constaté dans la réalité, à partir de ce qui a été acheté. Il inclut les pertes, les portions trop généreuses, les erreurs et le gaspillage.',f:'Ratio réel = (achats HT + stock début − stock fin) ÷ CA HT × 100. Sans stock saisi : achats HT ÷ CA HT. Les articles hors ratio (boissons, desserts) sont exclus des achats.',ex:'Achats de 2 300 € pour 12 000 € de CA HT : ratio réel 19,2 %. Si le ratio théorique est de 17,3 %, les 1,9 point d\'écart représentent de la marge qui s\'échappe.',live:has?`Ton client : ${eur(r.achatsHT)} ÷ ${eur(r.ca)} = ${pc(r.ratioReel)}.`:''},
@@ -738,9 +775,9 @@ document.addEventListener('click',e=>{
       if(p.lines.some(l=>!l.i||!(l.g>0))){x.err='Complète l\'ingrédient et le grammage de chaque ligne ('+p.nom+').';return render()}}
     drafts=drafts.filter(z=>z.id!==x.id);
     return change(()=>{const getI=l=>{if(l.i!=='__new')return l.i;const e=findIng(d,l.label);if(e)return e.id;const n={id:uid(),nom:l.label,unite:'kg',g:1000,prix:0,rend:1,tva:5.5,prov:true};d.ings.push(n);return n.id};ps.forEach(p=>{let ex=findPz(d,p.nom);if(!ex){ex={nom:p.nom,ttc:p.ttc,l:[]};d.recs.push(ex)}
-      if(p.ttc>0){logPrix(d,ex.nom,ex.ttc,p.ttc);ex.ttc=p.ttc}if(p.since)ex.since=p.since;if(p.lines.length)ex.l=p.lines.map(l=>{const o={i:getI(l),g:+l.g};if(l.pes>0)o.pes=+l.pes;return o})})},()=>'Fiches techniques mises à jour ('+ps.length+' pizza'+(ps.length>1?'s':'')+'). Tous les coûts et ratios sont recalculés.')}
+      if(p.ttc>0){logPrix(d,ex.nom,ex.ttc,p.ttc);ex.ttc=p.ttc}if(p.since)ex.since=p.since;if(p.lines.length){figeRecette(d,ex.nom);ex.l=p.lines.map(l=>{const o={i:getI(l),g:+l.g};if(l.pes>0)o.pes=+l.pes;return o})}})},()=>'Fiches techniques mises à jour ('+ps.length+' pizza'+(ps.length>1?'s':'')+'). Tous les coûts et ratios sont recalculés.')}
   if(t.dataset.drixok){const x=drafts.find(z=>z.id===t.dataset.drixok);drafts=drafts.filter(z=>z.id!==x.id);return change(()=>{d.index=x.doc.factures.map(f=>({...f}))},()=>{const c=controle(d);return `Index enregistré : ${c.rows.length} factures attendues, ${c.ok} reçues et conformes, ${c.missing} manquantes, ${c.diff} avec un total différent.`})}
-  if(t.dataset.drcadok){const x=drafts.find(z=>z.id===t.dataset.drcadok);drafts=drafts.filter(z=>z.id!==x.id);return change(()=>{d.cad=Object.assign({},x.doc.cad)},(b,a)=>`Cadrage mis à jour. Cible de ratio : <b>${pc(a.c)}</b> (avant : ${pc(b.c)}).`)}
+  if(t.dataset.drcadok){const x=drafts.find(z=>z.id===t.dataset.drcadok);drafts=drafts.filter(z=>z.id!==x.id);return change(()=>{d.cad=Object.assign({},d.cad,x.doc.cad)},(b,a)=>`Cadrage mis à jour. Cible de ratio : <b>${pc(a.c)}</b> (avant : ${pc(b.c)}).`)}
   if(t.dataset.drx){drafts=drafts.filter(z=>z.id!==t.dataset.drx);return render()}
   if(t.dataset.drlx){const x=drafts.find(z=>z.id===t.dataset.dr);x.doc.lines.splice(+t.dataset.drlx,1);return render()}
   if(t.dataset.dradd2){const x=drafts.find(z=>z.id===t.dataset.dradd2);x.doc.lines.push({label:'',q:0,ht:0,i:'',p:''});return render()}
@@ -785,8 +822,9 @@ document.addEventListener('click',e=>{
     return change(()=>d.docs.push(isF?{id:uid(),type:'achat',date,ref:'Import',fourn:$('#cff').value||'Import',l}:{id:uid(),type:'vente',date,ref:'Import ventes',fourn:'Caisse',l:stampPu(d,l)}),docMsg(date))}
   if(t.id==='radd')return change(()=>{const n='Nouvelle pizza '+(d.recs.length+1);d.recs.push({nom:n,ttc:10,l:[]});rec=n});
   if(t.id==='rdel')return change(()=>{d.recs=d.recs.filter(r=>r.nom!==rec);rec=null});
-  if(t.id==='ladd')return change(()=>{if(d.ings[0])d.recs.find(r=>r.nom===rec).l.push({i:d.ings[0].id,g:0})});
-  if(t.dataset.lx!=null)return change(()=>d.recs.find(r=>r.nom===rec).l.splice(+t.dataset.lx,1));
+  if(t.id==='ladd')return change(()=>{if(d.ings[0])editRecette(d,rec,r=>r.l.push({i:d.ings[0].id,g:0}))});
+  if(t.dataset.lx!=null)return change(()=>editRecette(d,rec,r=>r.l.splice(+t.dataset.lx,1)));
+  if(t.id==='rpast')return change(()=>d.docs.forEach(x=>{if(x.type==='vente')x.l.forEach(l=>{if(l.p===rec)delete l.rl})}),()=>`Recette actuelle de ${esc(rec)} appliquée à toutes les ventes passées. Ratios théoriques et écarts recalculés.`);
   if(t.id==='iadd')return change(()=>d.ings.push({id:uid(),nom:'Nouvel ingrédient',unite:'kg',g:1000,prix:1,rend:1,tva:5.5}));
   if(t.dataset.idel){const used=d.recs.some(r=>r.l.some(l=>l.i===t.dataset.idel))||d.docs.some(x=>x.l.some(l=>l.i===t.dataset.idel));if(used){$('#ierr').textContent='Cet ingrédient est utilisé dans une recette ou une facture. Retire-le d\'abord de ces endroits.';return}return change(()=>d.ings=d.ings.filter(i=>i.id!==t.dataset.idel))}
   if(t.id==='apply')return change(()=>{d.recs.forEach(r=>{if(d.sim[r.nom]!=null){logPrix(d,r.nom,r.ttc,+d.sim[r.nom]);r.ttc=+d.sim[r.nom]}});d.sim={}},()=>'Nouveaux prix appliqués à la carte. Tous les ratios sont recalculés.');
@@ -794,7 +832,11 @@ document.addEventListener('click',e=>{
   if(t.id==='pdf'){t.textContent='Création du PDF…';makePdf().then(m=>{t.textContent=m}).catch(()=>{t.textContent='PDF impossible ici'});return}
   if(t.id==='cp'||t.id==='cpx'){const txt=t.id==='cp'?$('#bil').textContent:$('#exp').value;const ta=t.id==='cpx'?$('#exp'):null;
     (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(()=>{t.textContent='Copié'}).catch(()=>{if(ta){ta.select();t.textContent='Sélectionné, copie avec Ctrl+C'}else t.textContent='Copie refusée, sélectionne le texte'});return}
-  if(t.id==='impb'){try{const o=JSON.parse($('#imp').value);if(!o.clients||!o.cur||!o.clients[o.cur])throw 0;S=o;save();banner='Sauvegarde restaurée.';render()}catch(x){$('#serr').textContent='Sauvegarde illisible. Colle le texte complet copié depuis ce logiciel.'}return}
+  if(t.id==='impb'){let o;try{o=JSON.parse($('#imp').value);if(!o||!o.clients||!o.cur||!o.clients[o.cur]||Object.values(o.clients).some(c=>!c||!Array.isArray(c.docs)||!Array.isArray(c.recs)||!Array.isArray(c.ings)))throw 0}catch(x){$('#serr').textContent='Sauvegarde illisible. Colle le texte complet copié depuis ce logiciel.';return}
+    const nIn=Object.keys(o.clients).length,nCur=Object.keys(S.clients).length;
+    if(t.dataset.arm!=='1'){t.dataset.arm='1';t.textContent='Confirmer : remplacer';$('#serr').textContent=`Attention : la restauration remplace tes ${nCur} client(s) actuel(s) par les ${nIn} client(s) de la sauvegarde (${Object.values(o.clients).map(c=>c.nom).join(', ')}). Clique sur « Confirmer : remplacer ». La version actuelle restera récupérable.`;return}
+    keepPrev(JSON.stringify(S),'restauration');S=o;save();banner='Sauvegarde restaurée. La version précédente est conservée : bouton « Revenir à cette version » dans Ingrédients et données.';render();return}
+  if(t.id==='undo'){const p=getPrev();if(!p)return;let o;try{o=JSON.parse(p.json)}catch(x){return}keepPrev(JSON.stringify(S),'retour en arrière');S=o;if(!S.clients[S.cur])S.cur=Object.keys(S.clients)[0];save();banner='Version précédente rétablie. La version que tu viens de quitter est à son tour conservée.';render();return}
   if(t.id==='delcl'){if(Object.keys(S.clients).length<2){$('#serr').textContent='Garde au moins un client.';return}if(t.dataset.arm!=='1'){t.dataset.arm='1';t.textContent='Confirmer la suppression';return}delete S.clients[S.cur];S.cur=Object.keys(S.clients)[0];save();render();return}
   if(t.id==='newcl'){const id=uid();S.clients[id]=blank('Nouveau client');S.cur=id;save();view='donnees';period='all';location.hash='donnees';return render()}
 });
@@ -815,11 +857,12 @@ document.addEventListener('change',e=>{
   if(t.id==='rn'){const v=t.value.trim();if(!v||d.recs.some(r=>r.nom===v))return render();return change(()=>{const r=d.recs.find(r=>r.nom===rec);d.docs.forEach(x=>x.l.forEach(l=>{if(l.p===r.nom)l.p=v}));r.nom=v;rec=v})}
   if(t.id==='rp')return change(()=>{const r=d.recs.find(r=>r.nom===rec);const v=parseNum(t.value)||0;logPrix(d,r.nom,r.ttc,v);r.ttc=v});
   if(t.id==='rs')return change(()=>{d.recs.find(r=>r.nom===rec).since=t.value||null});
-  if(t.dataset.ls!=null)return change(()=>d.recs.find(r=>r.nom===rec).l[+t.dataset.ls].i=t.value);
+  if(t.dataset.ls!=null)return change(()=>editRecette(d,rec,r=>r.l[+t.dataset.ls].i=t.value));
   if(t.dataset.lp!=null)return change(()=>{const l=d.recs.find(r=>r.nom===rec).l[+t.dataset.lp];const v=parseNum(t.value);if(v>0)l.pes=v;else delete l.pes});
-  if(t.dataset.lg!=null)return change(()=>d.recs.find(r=>r.nom===rec).l[+t.dataset.lg].g=parseNum(t.value)||0);
+  if(t.dataset.lg!=null)return change(()=>editRecette(d,rec,r=>r.l[+t.dataset.lg].g=parseNum(t.value)||0));
   if(t.dataset.sim){d.sim[t.dataset.sim]=parseNum(t.value);save();return render()}
   if(t.dataset.cad)return change(()=>d.cad[t.dataset.cad]=parseNum(t.value)||0);
+  if(t.dataset.var)return change(()=>{d.var=d.var||{};d.var[t.dataset.var]=Math.min(100,Math.max(0,parseNum(t.value)||0))});
   if(t.id==='pro_nom'||t.id==='pro_ct'){S.pro=S.pro||{};S.pro[t.id==='pro_nom'?'nom':'ct']=t.value.trim();save();return}
   if(t.id==='pd'){return change(()=>d.peseeDate=t.value||null)}
   if(t.dataset.stock){const k=t.dataset.stock,v=t.value.trim(),n=parseNum(v);if(v!==''&&!(n>=0))return render();
