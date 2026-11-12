@@ -94,7 +94,7 @@ const norm=s=>String(s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().re
 const uid=()=>Math.random().toString(36).slice(2,9);
 
 /* ---------- état et sauvegarde ---------- */
-let S=null, view='tableau', period='all', rec=null, banner=null, saveT=null, dbDoc=null;
+let S=null, view='tableau', period='all', rec=null, banner=null, saveT=null, dbDoc=null, syncErr=null;
 function blank(nom){return {nom,tva:10,seuil:10,volmin:20000,perte:4,cible:null,cad:{perso:0,loyer:0,energie:0,autres:0,emprunt:0,verse:0},var:{plat:0,com:0,cb:0},ings:[],recs:[],docs:[],sim:{}}}
 function load(){
   try{const r=localStorage.getItem('rp.v1');if(r){S=JSON.parse(r)}}catch(e){}
@@ -104,7 +104,7 @@ function D(){return S.clients[S.cur]}
 function save(){
   S.t=Date.now();
   try{localStorage.setItem('rp.v1',JSON.stringify(S))}catch(e){}
-  clearTimeout(saveT);saveT=setTimeout(async()=>{try{if(dbDoc)await dbDoc.set({json:JSON.stringify(S),t:S.t})}catch(e){}},900);
+  clearTimeout(saveT);saveT=setTimeout(async()=>{if(!dbDoc)return;const was=syncErr;try{await dbDoc.set({json:JSON.stringify(S),t:S.t});syncErr=null}catch(e){syncErr=(e&&e.code)||'erreur'}if(was!==syncErr&&view==='donnees')render()},900);
 }
 /* Garde la version remplacée (restauration, synchronisation) pour pouvoir revenir en arrière */
 function keepPrev(json,why){try{localStorage.setItem('rp.prev',JSON.stringify({t:Date.now(),why,json}))}catch(e){}}
@@ -391,7 +391,7 @@ function vDonnees(){
    <div class="row"><label for="s_perte">Pertes ordinaires (%)</label><input class="n" id="s_perte" type="number" value="${d.perte}"></div>
    <div class="row"><label for="s_vol">Volume minimum pour conclure (g)</label><input class="n" id="s_vol" type="number" value="${d.volmin}"></div></div></div>
   <div class="card"><div class="sec"><h3>Mon activité</h3></div><p class="small mut">Affiché en en-tête du bilan PDF.</p><div class="list"><div><label class="small mut" for="pro_nom">Nom de l'activité</label><br><input class="w" id="pro_nom" value="${esc((S.pro||{}).nom||'')}"></div><div><label class="small mut" for="pro_ct">Coordonnées (téléphone, e-mail)</label><br><input class="w" id="pro_ct" value="${esc((S.pro||{}).ct||'')}"></div></div></div>
-  <div class="card"><div class="sec"><h3>Sauvegarde</h3></div><p class="small mut">Les données sont gardées dans ce navigateur${dbDoc?' et dans ton espace privé de la page':''}. Copie la sauvegarde pour la conserver ailleurs.</p>
+  <div class="card"><div class="sec"><h3>Sauvegarde</h3></div><p class="small mut">Les données sont gardées dans ce navigateur${dbDoc?' et dans ton espace privé de la page, visible de toi seul':''}. Copie la sauvegarde pour la conserver ailleurs.</p>${syncErr?`<div class="note" style="margin-bottom:8px"><b>Sauvegarde en ligne impossible</b> (${esc(syncErr)}). Tes données restent dans ce navigateur mais ne sont plus copiées en ligne, souvent parce qu'elles dépassent 256 Ko. Copie la sauvegarde ci-dessous et garde-la ailleurs, ou supprime un client que tu ne suis plus.</div>`:''}
    <textarea id="exp" rows="3" readonly>${esc(JSON.stringify(S))}</textarea><div class="row" style="margin-top:6px"><button class="g" id="cpx">Copier la sauvegarde</button></div>
    <label class="small mut" for="imp">Restaurer : colle une sauvegarde</label><textarea id="imp" rows="2"></textarea><div class="row" style="margin-top:6px"><button class="g" id="impb">Restaurer</button><button class="g" id="delcl">Supprimer ce client</button></div><p class="ex" id="serr"></p>
    ${(()=>{const p=getPrev();return p?`<div class="note" style="margin-top:8px">Version remplacée le ${new Date(p.t).toLocaleString('fr-FR')} (${esc(p.why)}) conservée dans ce navigateur. <button class="g" id="undo">Revenir à cette version</button></div>`:''})()}</div></div>`
