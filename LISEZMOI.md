@@ -17,7 +17,7 @@ Avec le stock du début et de la fin d'une période, le ratio réel utilise la c
 | `RatioPizza.html` | Publié comme artefact dans Claude | Oui (PDF, photo, CSV, Excel) | Navigateur + espace privé en ligne |
 | `RatioPizza-bureau.html` | Sur ton ordinateur, sans internet | Non : saisie manuelle ou copier-coller | Navigateur de cet ordinateur |
 
-Les deux versions partagent le même format de sauvegarde. Pour passer de l'une à l'autre : onglet **Ingrédients et données**, « Copier la sauvegarde », puis « Restaurer » dans l'autre version.
+Les deux versions partagent le même format de sauvegarde. Pour passer de l'une à l'autre : onglet **Ingrédients et données**, « Enregistrer la sauvegarde dans un fichier », puis « Ouvrir un fichier de sauvegarde » dans l'autre version. Le copier-coller reste possible.
 
 ## Sur téléphone
 
@@ -31,7 +31,7 @@ Le fichier `RatioPizza-bureau.html` n'est pas fait pour le téléphone : les té
 2. Double-clique dessus : il s'ouvre dans ton navigateur (Chrome, Edge ou Firefox).
 3. Ajoute-le à tes favoris pour le rouvrir facilement.
 
-Les données sont gardées par le navigateur, pour ce fichier à cet emplacement. Garde toujours le même navigateur et ne déplace pas le fichier. Copie la sauvegarde régulièrement et garde-la ailleurs : effacer les données du navigateur efface aussi celles de RatioPizza.
+Les données sont gardées par le navigateur, pour ce fichier à cet emplacement. Garde toujours le même navigateur et ne déplace pas le fichier. Enregistre régulièrement la sauvegarde dans un fichier et garde-le ailleurs (clé USB, Drive, e-mail) : effacer les données du navigateur efface aussi celles de RatioPizza.
 
 ## Mettre à jour la version ordinateur
 
