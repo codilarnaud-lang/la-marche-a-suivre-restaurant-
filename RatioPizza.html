@@ -250,7 +250,7 @@ function vTableau(){
   <div class="grid">
    <div class="kpi"><div class="l">CA HT</div><div class="v">${eur(r.ca)}</div><div class="s">${fmt(r.nPizzas,0)} pizzas vendues</div></div>
    <div class="kpi"><div class="l">Achats HT</div><div class="v">${eur(r.achatsHT)}</div><div class="s">${r.nAchats} factures${r.horsRatio>0?' · '+eur(r.horsRatio)+' hors ratio exclus':''}</div></div>
-   <div class="kpi"><div class="l">Ratio matière réel</div><div class="v ${gap>0?'bad':'good'}">${pc(r.ratioReel)}</div><div class="s">${r.stk!=null?'(achats '+(r.stk>=0?'+ ':'− ')+eur(Math.abs(r.stk))+' de stock) ÷ CA HT':'achats ÷ CA HT, stock non saisi'}</div></div>
+   <div class="kpi"><div class="l">Ratio matière réel</div><div class="v ${gap>0?'bad':'good'}">${pc(r.ratioReel)}</div><div class="s">${r.stk!=null?'(achats '+(r.stk>=0?'+ ':'− ')+eur(Math.abs(r.stk),2)+' de stock) ÷ CA HT':'achats ÷ CA HT, stock non saisi'}</div></div>
    <div class="kpi"><div class="l">Cible (${c.src})</div><div class="v">${pc(c.val)}</div><div class="s">${gap==null?'':'écart '+(gap>0?'+':'')+fmt(gap,1)+' pt'}</div></div>
    <div class="kpi"><div class="l">Ratio théorique</div><div class="v">${pc(r.ratioTheo)}</div><div class="s">recettes × ventes</div></div>
   </div>
@@ -264,7 +264,7 @@ function vTableau(){
 }
 function suivi(d,all){return suivi0(d,all)+controleCard(d)}
 function suivi0(d,all){
-  const st=d.stocks||{},inp=m=>stockSrc(d,m)==='inv'?`<a href="#stocks" data-invm="${m}" title="Voir l'inventaire">${eur(invVal(d,m))}</a> <span class="small mut">inventaire</span>`:`<input class="n" type="number" step="10" min="0" data-stock="${m}" value="${st[m]??''}" placeholder="–" aria-label="Stock fin ${mlab(m)} en euros HT">`;
+  const st=d.stocks||{},inp=m=>stockSrc(d,m)==='inv'?`<a href="#stocks" data-invm="${m}" title="Voir l'inventaire">${eur(invVal(d,m),2)}</a> <span class="small mut">inventaire</span>`:`<input class="n" type="number" step="10" min="0" data-stock="${m}" value="${st[m]??''}" placeholder="–" aria-label="Stock fin ${mlab(m)} en euros HT">`;
   const rows=all.map(m=>{const ds=d.docs.filter(x=>x.date.slice(0,7)===m);const nv=ds.filter(x=>x.type==='vente').length,na=ds.filter(x=>x.type==='achat').length;
     return `<tr><td>${mlab(m)}</td><td>${nv?pill('ok','Ventes reçues'):pill('bd','Ventes manquantes')}</td><td class="n">${na}</td><td>${na?pill('ok','Factures reçues'):pill('bd','Pas de facture')}</td><td class="n">${inp(m)}</td><td>${stockAdj(d,[m])!=null?pill('ok','Ratio corrigé'):pill('nt','Achats seuls')}</td></tr>`}).join('');
   const p0=all.length?prevMonth(all[0]):null;
@@ -355,16 +355,16 @@ function vStocks(){
     return `<tr><td>${esc(i.nom)}</td><td>${esc(i.unite)} <span class="small mut">(${fmt(i.g,0)} ${i.pc?'pièces':'g'})</span></td><td class="n">${fmt(p)} €</td><td class="n mut">${pq==null?'–':fmt(pq,pq%1?2:0)}</td><td class="n"><input class="n" type="number" step="any" min="0" data-inv="${esc(i.id)}" value="${q??''}" placeholder="–" aria-label="Stock de ${esc(i.nom)} en ${esc(i.unite)}"></td><td class="n">${v==null?'–':eur(v,2)}</td></tr>`}).join('');
   const val=invVal(d,invM),pv=stockVal(d,pm),tot=d.stocks&&d.stocks[invM]!=null&&d.stocks[invM]!==''?+d.stocks[invM]:null;
   const hr=d.ings.filter(i=>i.hr).length;
-  const sum=ms.slice().reverse().map(m=>{const k=stockSrc(d,m),c=invOf(d,m);return `<tr><td>${mlab(m)}${m===ms[0]?' <span class="small mut">(ouverture)</span>':''}</td><td>${k==='inv'?pill('ok','Inventaire détaillé · '+Object.keys(c).length+' produits'):k==='total'?pill('nt','Total saisi'):pill('wn','Aucun')}</td><td class="n">${k?eur(stockVal(d,m)):'–'}</td><td><button class="g" data-invmb="${m}">${m===invM?'Affiché':'Ouvrir'}</button></td></tr>`}).join('');
+  const sum=ms.slice().reverse().map(m=>{const k=stockSrc(d,m),c=invOf(d,m);return `<tr><td>${mlab(m)}${m===ms[0]?' <span class="small mut">(ouverture)</span>':''}</td><td>${k==='inv'?pill('ok','Inventaire détaillé · '+Object.keys(c).length+' produits'):k==='total'?pill('nt','Total saisi'):pill('wn','Aucun')}</td><td class="n">${k?eur(stockVal(d,m),2):'–'}</td><td><button class="g" data-invmb="${m}">${m===invM?'Affiché':'Ouvrir'}</button></td></tr>`}).join('');
   return `${banner?`<div class="banner" role="status">${banner}</div>`:''}
   <div class="row" style="justify-content:space-between"><h2>Gestion des stocks</h2><div class="mode" role="group" aria-label="Mois de l'inventaire">${ms.map(m=>`<button data-invmb="${m}" class="${m===invM?'on':''}">${mlab(m)}</button>`).join('')}</div></div>
   <div class="grid">
-   <div class="kpi"><div class="l">Stock fin ${mlab(invM)}</div><div class="v">${val!=null?eur(val):(tot!=null?eur(tot):'–')}</div><div class="s">${src==='inv'?'inventaire détaillé':src==='total'?'total saisi':'pas encore saisi'}</div></div>
+   <div class="kpi"><div class="l">Stock fin ${mlab(invM)}</div><div class="v">${val!=null?eur(val,2):(tot!=null?eur(tot,2):'–')}</div><div class="s">${src==='inv'?'inventaire détaillé':src==='total'?'total saisi':'pas encore saisi'}</div></div>
    <div class="kpi"><div class="l">Produits comptés</div><div class="v">${n}/${ings.length}</div><div class="s">${n?'les autres comptent pour 0':'inventaire non commencé'}</div></div>
-   <div class="kpi"><div class="l">Variation sur le mois</div><div class="v">${val!=null&&pv!=null?(val-pv>=0?'+':'−')+eur(Math.abs(val-pv)):'–'}</div><div class="s">${pv!=null?'stock fin '+mlab(pm)+' : '+eur(pv):'stock de '+mlab(pm)+' inconnu'}</div></div>
+   <div class="kpi"><div class="l">Variation sur le mois</div><div class="v">${val!=null&&pv!=null?(val-pv>=0?'+':'−')+eur(Math.abs(val-pv),2):'–'}</div><div class="s">${pv!=null?'stock fin '+mlab(pm)+' : '+eur(pv,2):'stock de '+mlab(pm)+' inconnu'}</div></div>
   </div>
   <div class="card"><div class="sec"><h3>Inventaire de fin ${mlab(invM)}</h3><span class="row">${prev?`<button class="g" id="invcopy">Reprendre les quantités de ${mlab(pm)}</button>`:''}${src==='inv'?'<button class="x" id="invclr">Effacer cet inventaire</button>':''}</span></div>
-   ${tot!=null&&val!=null?`<div class="note" style="margin-bottom:8px">Un total de ${eur(tot)} avait été saisi pour ce mois dans le Tableau de bord. L'inventaire détaillé (${eur(val)}) le remplace dans les calculs.</div>`:''}
+   ${tot!=null&&val!=null?`<div class="note" style="margin-bottom:8px">Un total de ${eur(tot,2)} avait été saisi pour ce mois dans le Tableau de bord. L'inventaire détaillé (${eur(val,2)}) le remplace dans les calculs.</div>`:''}
    <div class="tw"><table><thead><tr><th>Produit</th><th>Unité de facture</th><th class="n">Prix HT / unité</th><th class="n">Mois précédent</th><th class="n">Quantité en stock</th><th class="n">Valeur HT</th></tr></thead><tbody>${rows||'<tr><td colspan="6" class="mut">Aucun produit. Ajoute des factures ou des ingrédients d\'abord.</td></tr>'}</tbody>
    <tfoot><tr><th>Total</th><th></th><th></th><th></th><th></th><th class="n">${val!=null?eur(val,2):'–'}</th></tr></tfoot></table></div>
    <p class="small mut">Compte ce qui reste en réserve le dernier jour du mois, dans l'unité de la facture : 2,5 cartons, 3,2 kg, 40 boîtes à pizza. Laisse vide ce qui n'est pas en stock : dès que l'inventaire du mois est commencé, un produit non saisi compte pour 0. La valeur utilise le prix HT de référence au moment de la saisie, il ne change plus ensuite.${hr?` Les ${hr} article(s) hors ratio (boissons, desserts…) ne sont pas listés.`:''}</p>
@@ -932,7 +932,7 @@ document.addEventListener('change',e=>{
   if(t.dataset.inv){const id=t.dataset.inv,v=t.value.trim(),n=parseNum(v);if(v!==''&&!(n>=0)){const x=$('#invErr');if(x)x.textContent='Quantité invalide : saisis un nombre positif, par exemple 2,5.';return}
     const m=invM,nx=nextMonth(m);
     return change(()=>{d.inv=d.inv||{};const mm=d.inv[m]=d.inv[m]||{},i=d.ings.find(z=>z.id===id);if(v==='')delete mm[id];else mm[id]={q:n,p:mm[id]&&mm[id].p>0?mm[id].p:(i?i.prix:0)};if(!Object.keys(mm).length)delete d.inv[m]},
-      (b,a)=>{const f=k=>{const x=b.m.find(r=>r[0]===k),y=a.m.find(r=>r[0]===k);return x&&y&&y[1]!=null&&x[1]!==y[1]?` Ratio réel de ${mlab(k)} : ${pc(x[1])} → <b>${pc(y[1])}</b>.`:''};return `Stock fin ${mlab(m)} : ${eur(invVal(d,m)||0)}.`+f(m)+f(nx)})}
+      (b,a)=>{const f=k=>{const x=b.m.find(r=>r[0]===k),y=a.m.find(r=>r[0]===k);return x&&y&&y[1]!=null&&x[1]!==y[1]?` Ratio réel de ${mlab(k)} : ${pc(x[1])} → <b>${pc(y[1])}</b>.`:''};return `Stock fin ${mlab(m)} : ${eur(invVal(d,m)||0,2)}.`+f(m)+f(nx)})}
   if(t.dataset.stock){const k=t.dataset.stock,v=t.value.trim(),n=parseNum(v);if(v!==''&&!(n>=0))return render();
     return change(()=>{d.stocks=d.stocks||{};if(v==='')delete d.stocks[k];else d.stocks[k]=n},(b,a)=>{const x=b.m.find(r=>r[0]===k),y=a.m.find(r=>r[0]===k);return 'Stock enregistré.'+(x&&y&&y[1]!=null?` Ratio réel de ${mlab(k)} : ${pc(x[1])} → <b>${pc(y[1])}</b>.`:'')})}
   if(t.id==='pf'){pzF=t.value;return render()}
