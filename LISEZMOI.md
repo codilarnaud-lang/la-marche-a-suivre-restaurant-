@@ -2,6 +2,14 @@
 
 Audit et suivi mensuel du ratio matière des pizzerias : factures, ventes, fiches techniques, écarts, stock, cible et bilan PDF.
 
+## Stock de fin de mois
+
+Deux façons de le saisir, au choix pour chaque mois :
+- **Total** : la valeur HT du stock, dans le tableau « Suivi des documents et du stock » du Tableau de bord.
+- **Produit par produit** : onglet **Stocks**, quantité de chaque produit dans l'unité de la facture. La valeur est calculée au prix HT de référence au moment de la saisie. Pour ce mois, elle remplace le total saisi.
+
+Avec le stock du début et de la fin d'une période, le ratio réel utilise la consommation réelle (achats + stock début − stock fin). L'inventaire produit par produit corrige aussi les écarts par produit de l'onglet Écarts.
+
 ## Deux versions
 
 | Fichier | Où l'utiliser | Lecture automatique des documents | Sauvegarde |
