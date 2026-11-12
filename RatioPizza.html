@@ -124,6 +124,18 @@ function save(){
   try{localStorage.setItem('rp.v1',JSON.stringify(S))}catch(e){}
   clearTimeout(saveT);saveT=setTimeout(async()=>{if(!dbDoc)return;const was=syncErr;try{await dbDoc.set({json:JSON.stringify(S),t:S.t});syncErr=null}catch(e){syncErr=(e&&e.code)||'erreur'}if(was!==syncErr&&view==='donnees')render()},900);
 }
+/* Sauvegarde dans un fichier JSON daté : capacité « downloads » dans Claude, lien de téléchargement ailleurs */
+async function saveBackupFile(btn){
+  const now=new Date(),name='ratiopizza-sauvegarde-'+now.toISOString().slice(0,10)+'.json';
+  const done=()=>{S.lastBackup=Date.now();save();const i=$('#bkinfo');if(i)i.textContent='Dernier fichier de sauvegarde : '+new Date(S.lastBackup).toLocaleString('fr-FR')+'.'};
+  const blob=new Blob([JSON.stringify({app:'RatioPizza',format:1,enregistre:now.toISOString(),data:{...S,lastBackup:Date.now()}},null,1)],{type:'application/json'});
+  const say=m=>{btn.textContent=m;setTimeout(()=>{btn.textContent='Enregistrer la sauvegarde dans un fichier'},4000)};
+  if(inClaude()){const dl=await cap('downloads');
+    if(!dl){say('Enregistrement indisponible ici : utilise le copier-coller');return}
+    try{await dl.save({filename:name,data:blob});done();say('Fichier enregistré')}catch(e){say(e&&e.code==='declined'?'Enregistrement annulé':'Fichier non enregistré')}
+    return}
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000);done();say('Fichier téléchargé : '+name)}
 /* Garde la version remplacée (restauration, synchronisation) pour pouvoir revenir en arrière */
 function keepPrev(json,why){try{localStorage.setItem('rp.prev',JSON.stringify({t:Date.now(),why,json}))}catch(e){}}
 function getPrev(){try{const p=JSON.parse(localStorage.getItem('rp.prev')||'null');return p&&p.json?p:null}catch(e){return null}}
@@ -448,9 +460,13 @@ function vDonnees(){
    <div class="row"><label for="s_perte">Pertes ordinaires (%)</label><input class="n" id="s_perte" type="number" value="${d.perte}"></div>
    <div class="row"><label for="s_vol">Volume minimum pour conclure (g)</label><input class="n" id="s_vol" type="number" value="${d.volmin}"></div></div></div>
   <div class="card"><div class="sec"><h3>Mon activité</h3></div><p class="small mut">Affiché en en-tête du bilan PDF.</p><div class="list"><div><label class="small mut" for="pro_nom">Nom de l'activité</label><br><input class="w" id="pro_nom" value="${esc((S.pro||{}).nom||'')}"></div><div><label class="small mut" for="pro_ct">Coordonnées (téléphone, e-mail)</label><br><input class="w" id="pro_ct" value="${esc((S.pro||{}).ct||'')}"></div></div></div>
-  <div class="card"><div class="sec"><h3>Sauvegarde</h3></div><p class="small mut">Les données sont gardées dans ce navigateur${inClaude()?'':' (sur cet ordinateur uniquement : si tu effaces les données du navigateur, elles disparaissent)'}${dbDoc?' et dans ton espace privé de la page, visible de toi seul':''}. Copie la sauvegarde pour la conserver ailleurs.</p>${syncErr?`<div class="note" style="margin-bottom:8px"><b>Sauvegarde en ligne impossible</b> (${esc(syncErr)}). Tes données restent dans ce navigateur mais ne sont plus copiées en ligne, souvent parce qu'elles dépassent 256 Ko. Copie la sauvegarde ci-dessous et garde-la ailleurs, ou supprime un client que tu ne suis plus.</div>`:''}
-   <textarea id="exp" rows="3" readonly>${esc(JSON.stringify(S))}</textarea><div class="row" style="margin-top:6px"><button class="g" id="cpx">Copier la sauvegarde</button></div>
-   <label class="small mut" for="imp">Restaurer : colle une sauvegarde</label><textarea id="imp" rows="2"></textarea><div class="row" style="margin-top:6px"><button class="g" id="impb">Restaurer</button><button class="g" id="delcl">Supprimer ce client</button></div><p class="ex" id="serr"></p>
+  <div class="card"><div class="sec"><h3>Sauvegarde</h3></div><p class="small mut">Les données sont gardées dans ce navigateur${inClaude()?'':' (sur cet ordinateur uniquement : si tu effaces les données du navigateur, elles disparaissent)'}${dbDoc?' et dans ton espace privé de la page, visible de toi seul':''}. Enregistre régulièrement une sauvegarde dans un fichier et garde-la ailleurs (clé USB, Drive, e-mail).</p>${syncErr?`<div class="note" style="margin-bottom:8px"><b>Sauvegarde en ligne impossible</b> (${esc(syncErr)}). Tes données restent dans ce navigateur mais ne sont plus copiées en ligne, souvent parce qu'elles dépassent 256 Ko. Copie la sauvegarde ci-dessous et garde-la ailleurs, ou supprime un client que tu ne suis plus.</div>`:''}
+   <div class="row"><button id="savef">Enregistrer la sauvegarde dans un fichier</button><button class="g" id="openf">Ouvrir un fichier de sauvegarde</button><input type="file" id="impf" accept=".json,application/json" hidden></div>
+   <p class="small mut" style="margin:6px 0 12px"><span id="bkinfo">${S.lastBackup?'Dernier fichier de sauvegarde : '+new Date(S.lastBackup).toLocaleString('fr-FR')+'.':'Aucun fichier de sauvegarde enregistré pour l\'instant.'}</span> Le fichier contient tous les clients et sert aussi à passer de la version PC à la version Claude.</p>
+   <details><summary class="small mut" style="cursor:pointer">Sauvegarde par copier-coller</summary>
+   <textarea id="exp" rows="3" readonly style="margin-top:8px">${esc(JSON.stringify(S))}</textarea><div class="row" style="margin-top:6px"><button class="g" id="cpx">Copier la sauvegarde</button></div>
+   <label class="small mut" for="imp">Restaurer : colle une sauvegarde</label><textarea id="imp" rows="2"></textarea></details>
+   <div class="row" style="margin-top:8px"><button class="g" id="impb">Restaurer</button><button class="g" id="delcl">Supprimer ce client</button></div><p class="ex" id="serr"></p>
    ${(()=>{const p=getPrev();return p?`<div class="note" style="margin-top:8px">Version remplacée le ${new Date(p.t).toLocaleString('fr-FR')} (${esc(p.why)}) conservée dans ce navigateur. <button class="g" id="undo">Revenir à cette version</button></div>`:''})()}</div></div>`
 }
 
@@ -896,7 +912,9 @@ document.addEventListener('click',e=>{
   if(t.id==='pdf'){t.textContent='Création du PDF…';makePdf().then(m=>{t.textContent=m}).catch(()=>{t.textContent='PDF impossible ici'});return}
   if(t.id==='cp'||t.id==='cpx'){const txt=t.id==='cp'?$('#bil').textContent:$('#exp').value;const ta=t.id==='cpx'?$('#exp'):null;
     (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(()=>{t.textContent='Copié'}).catch(()=>{if(ta){ta.select();t.textContent='Sélectionné, copie avec Ctrl+C'}else t.textContent='Copie refusée, sélectionne le texte'});return}
-  if(t.id==='impb'){let o;try{o=JSON.parse($('#imp').value);if(!o||!o.clients||!o.cur||!o.clients[o.cur]||Object.values(o.clients).some(c=>!c||!Array.isArray(c.docs)||!Array.isArray(c.recs)||!Array.isArray(c.ings)))throw 0}catch(x){$('#serr').textContent='Sauvegarde illisible. Colle le texte complet copié depuis ce logiciel.';return}
+  if(t.id==='savef'){saveBackupFile(t);return}
+  if(t.id==='openf'){const f=$('#impf');if(f)f.click();return}
+  if(t.id==='impb'){let o;try{o=JSON.parse($('#imp').value);if(o&&o.app==='RatioPizza'&&o.data)o=o.data;if(!o||!o.clients||!o.cur||!o.clients[o.cur]||Object.values(o.clients).some(c=>!c||!Array.isArray(c.docs)||!Array.isArray(c.recs)||!Array.isArray(c.ings)))throw 0}catch(x){$('#serr').textContent='Sauvegarde illisible. Ouvre un fichier enregistré par RatioPizza, ou colle le texte complet copié depuis ce logiciel.';return}
     const nIn=Object.keys(o.clients).length,nCur=Object.keys(S.clients).length;
     if(t.dataset.arm!=='1'){t.dataset.arm='1';t.textContent='Confirmer : remplacer';$('#serr').textContent=`Attention : la restauration remplace tes ${nCur} client(s) actuel(s) par les ${nIn} client(s) de la sauvegarde (${Object.values(o.clients).map(c=>c.nom).join(', ')}). Clique sur « Confirmer : remplacer ». La version actuelle restera récupérable.`;return}
     keepPrev(JSON.stringify(S),'restauration');S=o;save();banner='Sauvegarde restaurée. La version précédente est conservée : bouton « Revenir à cette version » dans Ingrédients et données.';render();return}
@@ -906,6 +924,9 @@ document.addEventListener('click',e=>{
 });
 document.addEventListener('change',e=>{
   const t=e.target,d=D();
+  if(t.id==='impf'){const f=t.files&&t.files[0];t.value='';if(!f)return;
+    f.text().then(txt=>{const ta=$('#imp'),b=$('#impb');if(!ta||!b)return;ta.value=txt;const det=ta.closest('details');if(det)det.open=true;b.dataset.arm='';b.textContent='Restaurer';b.click();
+      if(b.dataset.arm==='1')$('#serr').textContent='Fichier « '+f.name+' » lu. '+$('#serr').textContent}).catch(()=>{$('#serr').textContent='Impossible de lire ce fichier.'});return}
   if(t.id==='docf'){const fs=[...t.files];t.value='';handleFiles(fs);return}
   if(t.dataset.dr){const x=drafts.find(z=>z.id===t.dataset.dr);if(!x||!x.doc)return;x.err=null;
     if(t.dataset.drnw){const l=x.doc.lines[+t.dataset.drl],f=t.dataset.drnw;l.nw[f]=f==='hr'?t.checked:(f==='nom'||f==='unite')?t.value:(parseNum(t.value)||0);return render()}
