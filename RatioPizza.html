@@ -92,6 +92,9 @@ const mlab=m=>m==='all'?'Cumul':(MN[+m.slice(5)-1]||m.slice(5))+' '+m.slice(0,4)
 const okDate=v=>/^\d{4}-\d{2}-\d{2}$/.test(v||'')&&!isNaN(new Date(v))&&new Date(v).toISOString().slice(0,10)===v;
 const norm=s=>String(s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
 const uid=()=>Math.random().toString(36).slice(2,9);
+/* Fonctions de Claude (lecture des documents, sauvegarde en ligne, enregistrement de fichier) : null hors de Claude, par exemple dans la version pour ordinateur */
+const inClaude=()=>!!(window.claude&&typeof window.claude.use==='function');
+const cap=n=>inClaude()?window.claude.use(n).catch(()=>null):Promise.resolve(null);
 
 /* ---------- état et sauvegarde ---------- */
 let S=null, view='tableau', period='all', rec=null, banner=null, saveT=null, dbDoc=null, syncErr=null;
@@ -111,7 +114,7 @@ function keepPrev(json,why){try{localStorage.setItem('rp.prev',JSON.stringify({t
 function getPrev(){try{const p=JSON.parse(localStorage.getItem('rp.prev')||'null');return p&&p.json?p:null}catch(e){return null}}
 async function initDb(){
   try{
-    const user=await claude.use('user'),db=await claude.use('db');
+    const user=await cap('user'),db=await cap('db');
     if(!user||!db)return;const id=await user.id();if(!id)return;
     dbDoc=db.doc('data/users/'+id+'/ratiopizza');
     const snap=await dbDoc.get();
@@ -391,7 +394,7 @@ function vDonnees(){
    <div class="row"><label for="s_perte">Pertes ordinaires (%)</label><input class="n" id="s_perte" type="number" value="${d.perte}"></div>
    <div class="row"><label for="s_vol">Volume minimum pour conclure (g)</label><input class="n" id="s_vol" type="number" value="${d.volmin}"></div></div></div>
   <div class="card"><div class="sec"><h3>Mon activité</h3></div><p class="small mut">Affiché en en-tête du bilan PDF.</p><div class="list"><div><label class="small mut" for="pro_nom">Nom de l'activité</label><br><input class="w" id="pro_nom" value="${esc((S.pro||{}).nom||'')}"></div><div><label class="small mut" for="pro_ct">Coordonnées (téléphone, e-mail)</label><br><input class="w" id="pro_ct" value="${esc((S.pro||{}).ct||'')}"></div></div></div>
-  <div class="card"><div class="sec"><h3>Sauvegarde</h3></div><p class="small mut">Les données sont gardées dans ce navigateur${dbDoc?' et dans ton espace privé de la page, visible de toi seul':''}. Copie la sauvegarde pour la conserver ailleurs.</p>${syncErr?`<div class="note" style="margin-bottom:8px"><b>Sauvegarde en ligne impossible</b> (${esc(syncErr)}). Tes données restent dans ce navigateur mais ne sont plus copiées en ligne, souvent parce qu'elles dépassent 256 Ko. Copie la sauvegarde ci-dessous et garde-la ailleurs, ou supprime un client que tu ne suis plus.</div>`:''}
+  <div class="card"><div class="sec"><h3>Sauvegarde</h3></div><p class="small mut">Les données sont gardées dans ce navigateur${inClaude()?'':' (sur cet ordinateur uniquement : si tu effaces les données du navigateur, elles disparaissent)'}${dbDoc?' et dans ton espace privé de la page, visible de toi seul':''}. Copie la sauvegarde pour la conserver ailleurs.</p>${syncErr?`<div class="note" style="margin-bottom:8px"><b>Sauvegarde en ligne impossible</b> (${esc(syncErr)}). Tes données restent dans ce navigateur mais ne sont plus copiées en ligne, souvent parce qu'elles dépassent 256 Ko. Copie la sauvegarde ci-dessous et garde-la ailleurs, ou supprime un client que tu ne suis plus.</div>`:''}
    <textarea id="exp" rows="3" readonly>${esc(JSON.stringify(S))}</textarea><div class="row" style="margin-top:6px"><button class="g" id="cpx">Copier la sauvegarde</button></div>
    <label class="small mut" for="imp">Restaurer : colle une sauvegarde</label><textarea id="imp" rows="2"></textarea><div class="row" style="margin-top:6px"><button class="g" id="impb">Restaurer</button><button class="g" id="delcl">Supprimer ce client</button></div><p class="ex" id="serr"></p>
    ${(()=>{const p=getPrev();return p?`<div class="note" style="margin-top:8px">Version remplacée le ${new Date(p.t).toLocaleString('fr-FR')} (${esc(p.why)}) conservée dans ce navigateur. <button class="g" id="undo">Revenir à cette version</button></div>`:''})()}</div></div>`
@@ -491,17 +494,19 @@ async function makePdf(){
   P('Si l\'on a acheté plus d\'un produit que les ventes ne le justifient, l\'écart est positif. Une partie (quelques pour cent) est normale. Ce qui dépasse est à traiter : peser les portions, former l\'équipe, revoir les commandes.');
   H('Ce qu\'il faut retenir');
   P('Ces chiffres sont des estimations basées sur les factures et les ventes fournies. Les achats ne sont pas la consommation exacte (stock, livraisons décalées). Les gains annoncés ne sont pas garantis : ils supposent des ventes stables.',9);
-  const dl=await claude.use('downloads');
+  const dl=await cap('downloads');
   const name='bilan-'+norm(d.nom).replace(/ /g,'-')+'-'+period+'.pdf';
   if(!dl){doc.save(name);return 'PDF téléchargé'}
   try{await dl.save({filename:name,data:doc.output('blob')});return 'PDF enregistré'}catch(e){return e&&e.code==='declined'?'Téléchargement refusé':'PDF non enregistré'}
 }
 let drafts=[];
-document.addEventListener('paste',e=>{if(view!=='documents')return;const fs=e.clipboardData&&e.clipboardData.files?[...e.clipboardData.files]:[];if(fs.length){e.preventDefault();handleFiles(fs)}});
+document.addEventListener('paste',e=>{if(view!=='documents'||!inClaude())return;const fs=e.clipboardData&&e.clipboardData.files?[...e.clipboardData.files]:[];if(fs.length){e.preventDefault();handleFiles(fs)}});
 document.addEventListener('dragover',e=>{const z=e.target.closest&&e.target.closest('#dz');if(z){e.preventDefault();z.classList.add('over')}});
 document.addEventListener('dragleave',e=>{const z=e.target.closest&&e.target.closest('#dz');if(z)z.classList.remove('over')});
 document.addEventListener('drop',e=>{const z=e.target.closest&&e.target.closest('#dz');if(z){e.preventDefault();z.classList.remove('over');handleFiles([...e.dataTransfer.files])}});
 function autoCard(){
+  if(!inClaude())return `<div class="card"><div class="sec"><h3>Lecture automatique des documents</h3><span class="small mut">disponible dans la version Claude</span></div>
+  <p class="small mut" style="margin:0">Cette version fonctionne sur ton ordinateur, sans internet et sans Claude. Saisis les factures et les ventes avec les formulaires ci-dessous ou par copier-coller. Pour faire lire une facture PDF ou une photo, ouvre RatioPizza dans Claude : tu passes tes données d'une version à l'autre avec la sauvegarde (onglet Ingrédients et données).</p></div>`;
   return `<div class="card"><div class="sec"><h3>Lire un document automatiquement</h3><span class="small mut">facture PDF, photo, rapport de caisse, CSV</span></div>
   <div class="drop" id="dz"><b>Dépose un ou plusieurs documents ici</b><span class="small mut">ou clique pour les choisir (PDF, JPG, PNG, CSV, TXT)</span><span class="pill nt">Choisir un fichier</span>
   <input type="file" id="docf" multiple aria-label="Choisir un document" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;padding:0;border:0"></div>
@@ -571,7 +576,7 @@ async function readPdf(f,imgOk){
 }
 async function analyse(f){
   const d=D();
-  const sample=await claude.use('sample');
+  const sample=await cap('sample');
   if(!sample)throw new Error('La lecture automatique n\'est pas disponible dans cette fenêtre. Utilise la saisie ou le copier-coller.');
   const lim=await sample.limits().catch(()=>({}));
   if(!lim)throw new Error('Limites de lecture indisponibles.');
