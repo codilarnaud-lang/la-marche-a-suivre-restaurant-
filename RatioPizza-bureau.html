@@ -69,13 +69,28 @@ svg text{fill:var(--mut);font:11px var(--fb)}
 .drop.over,.drop:hover{border-color:var(--acc);background:var(--acc2)}
 .draft{border-top:1px solid var(--line);padding-top:12px;margin-top:12px;display:grid;gap:8px}
 .draft select,.draft input{max-width:230px}
+.mode{max-width:100%;overflow-x:auto;scrollbar-width:thin}.mode button{white-space:nowrap;flex:none}
+.split{display:grid;gap:16px;grid-template-columns:minmax(240px,1fr) minmax(300px,2.4fr)}
+#newcl .sm{display:none}
+/* Téléphone : en-tête compact sur une ligne, indicateurs sur deux colonnes, fiche sous la liste des pizzas */
+@media (max-width:640px){
+ .brand small,.top label{display:none}
+ .top{flex-wrap:nowrap}.top .row{flex-wrap:nowrap;flex:1;min-width:0;justify-content:flex-end;gap:8px}
+ #cl{min-width:0;flex:1;max-width:200px}#newcl{padding:7px 10px;flex:none}#newcl .lg{display:none}#newcl .sm{display:inline}
+ .tabs{margin-top:4px}.tabs a{padding:8px 10px}
+ .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .kpi{padding:12px}.kpi .v{font-size:21px}
+ .split{grid-template-columns:1fr}.pz{max-height:240px}
+ .grid2{grid-template-columns:1fr}
+ h2{font-size:18px}
+}
 </style>
 
 <div class="wrap">
 <header>
  <div class="top">
   <div class="brand">RatioPizza<small>audit de marge, suivi mensuel</small></div>
-  <div class="row"><label class="small mut" for="cl">Client</label><select id="cl"></select><button class="g" id="newcl">Nouveau client</button></div>
+  <div class="row"><label class="small mut" for="cl">Client</label><select id="cl"></select><button class="g" id="newcl" aria-label="Nouveau client"><span class="lg">Nouveau client</span><span class="sm">+ Client</span></button></div>
  </div>
  <nav class="tabs" id="tabs"></nav>
 </header>
@@ -719,7 +734,7 @@ function vFiches(){
     <div class="kpi"><div class="l">Marge brute</div><div class="v">${eur(z.ht-z.costR,2)}</div><div class="s">par pizza, HT</div></div></div>
    <p class="small mut">Coût réel estimé : quand un grammage pesé est renseigné, il remplace le grammage déclaré ; sinon, coût de la recette augmenté de la surconsommation constatée sur chaque ingrédient (achats ÷ théorie, après ${d.perte} % de pertes ordinaires), uniquement quand le volume permet de conclure. Prix de référence : voir Ingrédients.</p>`}
   return `<div class="row" style="justify-content:space-between"><h2>Fiches techniques</h2>${perSel()}</div>
-  <div class="grid2" style="grid-template-columns:minmax(240px,1fr) minmax(300px,2.4fr)"><div class="card"><div class="sec"><h3>Pizzas</h3><span class="small mut">ratio réel estimé</span></div><div class="pz">${list}</div><button class="g" id="radd" style="margin-top:10px">Ajouter une pizza</button></div><div class="card">${det}</div></div>
+  <div class="split"><div class="card"><div class="sec"><h3>Pizzas</h3><span class="small mut">ratio réel estimé</span></div><div class="pz">${list}</div><button class="g" id="radd" style="margin-top:10px">Ajouter une pizza</button></div><div class="card">${det}</div></div>
   <div class="card"><h3>Tableau de synthèse</h3><div class="tw"><table><thead><tr><th>Pizza</th><th class="n">Prix HT</th><th class="n">Coût théorique</th><th class="n">Coût réel estimé</th><th class="n">Marge</th><th class="n">Ratio réel</th><th class="n">Écart à la cible</th><th>Alerte</th></tr></thead><tbody>
   ${Object.values(r.pizzas).map(p=>{const e=p.ratioR-c.val;return `<tr><td>${esc(p.nom)}</td><td class="n">${fmt(p.ht)}</td><td class="n">${fmt(p.cost)}</td><td class="n">${fmt(p.costR)}</td><td class="n">${fmt(p.ht-p.costR)}</td><td class="n">${pc(p.ratioR)}</td><td class="n ${e>0?'bad':'good'}">${e>0?'+':''}${fmt(e,1)} pt</td><td>${e>0?pill('bd','Au-dessus de la cible'):pill('ok','Dans la cible')}</td></tr>`}).join('')}</tbody></table></div></div>`
 }

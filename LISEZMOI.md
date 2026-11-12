@@ -11,6 +11,12 @@ Audit et suivi mensuel du ratio matière des pizzerias : factures, ventes, fiche
 
 Les deux versions partagent le même format de sauvegarde. Pour passer de l'une à l'autre : onglet **Ingrédients et données**, « Copier la sauvegarde », puis « Restaurer » dans l'autre version.
 
+## Sur téléphone
+
+Utilise la version Claude : ouvre son lien dans l'application Claude (ou dans le navigateur du téléphone, connecté à ton compte Claude). Ses données sont sauvegardées dans ton espace privé en ligne : tu retrouves les mêmes clients sur ton PC et sur ton téléphone, à condition d'utiliser la version Claude sur les deux. La page s'adapte aux petits écrans.
+
+Le fichier `RatioPizza-bureau.html` n'est pas fait pour le téléphone : les téléphones ouvrent mal les fichiers HTML enregistrés et n'y gardent pas les données de façon fiable.
+
 ## Utiliser la version ordinateur
 
 1. Télécharge `RatioPizza-bureau.html` et range-le dans un dossier fixe (par exemple `Documents\RatioPizza`).
