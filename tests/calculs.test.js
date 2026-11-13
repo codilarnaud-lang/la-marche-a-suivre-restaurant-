@@ -3,7 +3,7 @@
 // dont les données d'exemple sont construites (outils/exemple-restaurant.py : bavette +13 %, crème +11 %).
 const test = require('node:test');
 const assert = require('node:assert');
-const { charger } = require('./charger.js');
+const { charger, fausseBase, attendre } = require('./charger.js');
 
 const proche = (v, attendu, tol = 0.01, msg) => assert.ok(Math.abs(v - attendu) <= tol, `${msg || ''} ${v} au lieu de ${attendu}`);
 
@@ -158,4 +158,62 @@ test('libellés mémorisés : reconnus, renommés, oubliés', () => {
   assert.strictEqual(val(`aliasPz(D(),'MENU MIDI').nom`), 'Formule déjeuner');
   run(`view='donnees';render0()`);
   assert.match(val(`document.querySelector('#main').innerHTML`), /Libellés mémorisés/);
+});
+
+// ---------- sauvegarde en ligne ----------
+const INDEX = 'data/users/u1/lamargeasuivre';
+async function pret(base, run) { for (let k = 0; k < 100 && !base.docs.has(INDEX); k++) await attendre(20); await run('syncing||Promise.resolve()'); }
+
+test('en ligne : découpage par client et par mois, puis relecture sur un autre appareil', async () => {
+  const base = fausseBase();
+  const A = charger({ claude: base.claude });
+  await pret(base, A.run);
+  const idx = JSON.parse(base.docs.get(INDEX));
+  assert.strictEqual(idx.fmt, 2);
+  const cid = A.val('S.cur');
+  assert.ok(idx.parts.includes('lmas-c-' + cid));
+  for (const m of ['2026-08', '2026-09', '2026-10']) assert.ok(idx.parts.includes(`lmas-d-${cid}-${m}`), m);
+  // un autre appareil, sans rien en local, retrouve exactement les mêmes données
+  const B = charger({ claude: base.claude });
+  await attendre(50); await pret(base, B.run);
+  assert.deepStrictEqual(B.val('S.clients'), A.val('S.clients'));
+  assert.strictEqual(B.val('syncErr'), null);
+});
+
+test('en ligne : un an de factures d\'un vrai restaurant ne bute plus sur 256 Ko', async () => {
+  const base = fausseBase();
+  const A = charger({ claude: base.claude });
+  await pret(base, A.run);
+  // 12 mois × 70 factures × 10 lignes
+  A.run(`(()=>{const d=D();for(let m=1;m<=12;m++)for(let f=0;f<70;f++){const mm=String(m).padStart(2,'0');d.docs.push({id:'g'+m+'-'+f,type:'achat',date:'2025-'+mm+'-'+String(1+f%28).padStart(2,'0'),ref:'FAC-2025-'+mm+'-'+f,fourn:'GROSSISTE EXEMPLE SARL',l:d.ings.slice(0,10).map(i=>({i:i.id,q:3.5,ht:41.37}))})}S.t=Date.now()})()`);
+  assert.ok(A.val('JSON.stringify(S).length') > 262144, 'l\'ensemble dépasse 256 Ko');
+  await A.run('syncNow()');
+  assert.strictEqual(A.val('syncErr'), null);
+  for (const [k, v] of base.docs) assert.ok(Buffer.byteLength(v) < 262144, k);
+  const B = charger({ claude: base.claude });
+  await attendre(50); await pret(base, B.run);
+  assert.strictEqual(B.val('D().docs.length'), A.val('D().docs.length'));
+});
+
+test('en ligne : seuls les morceaux modifiés sont réécrits', async () => {
+  const base = fausseBase();
+  const A = charger({ claude: base.claude });
+  await pret(base, A.run);
+  base.ecritures.length = 0;
+  A.run(`D().docs.find(x=>x.date.startsWith('2026-09')).ref='Z corrigé';S.t=Date.now()`);
+  await A.run('syncNow()');
+  const cid = A.val('S.cur');
+  assert.deepStrictEqual(base.ecritures.sort(), [INDEX, `data/users/u1/lmas-d-${cid}-2026-09`].sort());
+});
+
+test('en ligne : l\'ancien format en un seul document est repris', async () => {
+  const base = fausseBase();
+  const ancien = charger().val('S');
+  ancien.clients[ancien.cur].nom = 'Brasserie (ancien format)';
+  base.docs.set(INDEX, JSON.stringify({ json: JSON.stringify(ancien), t: 9e12 }));
+  const A = charger({ claude: base.claude });
+  for (let k = 0; k < 100 && !JSON.parse(base.docs.get(INDEX)).fmt; k++) await attendre(20);
+  await A.run('syncing||Promise.resolve()');
+  assert.strictEqual(A.val('D().nom'), 'Brasserie (ancien format)');
+  assert.strictEqual(JSON.parse(base.docs.get(INDEX)).fmt, 2, 'converti au nouveau format');
 });

@@ -116,7 +116,7 @@ const cap=async n=>{if(!(await claudeReady))return null;return window.claude.use
 claudeReady.then(ok=>{if(ok&&typeof S!=='undefined'&&S&&typeof render==='function')try{render()}catch(e){}});
 
 /* ---------- état et sauvegarde ---------- */
-let S=null, view='tableau', period='all', rec=null, banner=null, saveT=null, dbDoc=null, syncErr=null;
+let S=null, view='tableau', period='all', rec=null, banner=null, saveT=null, dbBase=null, dbIndex=null, dbSent={}, syncing=null, syncAgain=false, syncErr=null;
 function blank(nom){return {nom,tva:10,seuil:10,volmin:20000,perte:4,cible:null,cad:{perso:0,loyer:0,energie:0,autres:0,emprunt:0,verse:0},var:{plat:0,com:0,cb:0},bois:{ca:0,ratio:25},cats:['Entrées','Plats','Desserts'],ings:[],recs:[],preps:[],docs:[],couv:{},sim:{}}}
 /* Les sauvegardes de RatioPizza (version 1) restent lisibles : leurs produits sans catégorie sont rangés dans « Pizzas ».
    La marge à suivre a ses propres clés de stockage (lmas.v1, lmas.prev, lamargeasuivre) : elle ne partage jamais ses données avec RatioPizza. */
@@ -132,7 +132,7 @@ function D(){return S.clients[S.cur]}
 function save(){
   S.t=Date.now();
   try{localStorage.setItem('lmas.v1',JSON.stringify(S))}catch(e){}
-  clearTimeout(saveT);saveT=setTimeout(async()=>{if(!dbDoc)return;const was=syncErr;try{await dbDoc.set({json:JSON.stringify(S),t:S.t});syncErr=null}catch(e){syncErr=(e&&e.code)||'erreur'}if(was!==syncErr&&view==='donnees')render()},900);
+  clearTimeout(saveT);saveT=setTimeout(()=>{syncNow()},900);
 }
 /* Sauvegarde dans un fichier JSON daté : capacité « downloads » dans Claude, lien de téléchargement ailleurs */
 async function saveBackupFile(btn){
@@ -149,15 +149,44 @@ async function saveBackupFile(btn){
 /* Garde la version remplacée (restauration, synchronisation) pour pouvoir revenir en arrière */
 function keepPrev(json,why){try{localStorage.setItem('lmas.prev',JSON.stringify({t:Date.now(),why,json}))}catch(e){}}
 function getPrev(){try{const p=JSON.parse(localStorage.getItem('lmas.prev')||'null');return p&&p.json?p:null}catch(e){return null}}
+/* ---------- sauvegarde en ligne (Claude) ----------
+   Un document de la base Claude est limité à 256 Ko : les données sont découpées en un index (réglages communs et liste
+   des morceaux), un document par client (fiches, réglages, stocks) et un document par client et par mois (factures et
+   relevés de ventes). Seuls les morceaux modifiés sont réécrits ; l'index est écrit en dernier. */
+const MOIS_RE=/^lmas-d-(.+)-(\d{4}-\d{2})$/;
+function topJson(st){const o={};Object.keys(st).forEach(k=>{if(k!=='clients')o[k]=st[k]});return JSON.stringify(o)}
+function cloudParts(st){const parts={};Object.entries(st.clients||{}).forEach(([cid,c])=>{const m={};Object.keys(c).forEach(k=>{if(k!=='docs')m[k]=c[k]});parts['lmas-c-'+cid]=JSON.stringify(m);
+  const by={};(c.docs||[]).forEach(x=>{const mo=/^\d{4}-\d{2}/.test(x.date||'')?x.date.slice(0,7):'0000-00';(by[mo]=by[mo]||[]).push(x)});
+  Object.entries(by).forEach(([mo,ds])=>{parts['lmas-d-'+cid+'-'+mo]=JSON.stringify(ds)})});return parts}
+function assemble(idx,parts){const st=JSON.parse(idx.top||'{}');st.clients={};
+  Object.entries(parts).forEach(([k,v])=>{if(k.startsWith('lmas-c-')){const cid=k.slice(7);st.clients[cid]=Object.assign(JSON.parse(v),{docs:(st.clients[cid]||{}).docs||[]})}});
+  Object.entries(parts).forEach(([k,v])=>{const m=k.match(MOIS_RE);if(m&&st.clients[m[1]])st.clients[m[1]].docs.push(...JSON.parse(v))});
+  st.t=idx.t;return st}
+async function syncNow(){if(!dbBase)return;if(syncing){syncAgain=true;return syncing}
+  const was=syncErr;
+  syncing=(async()=>{try{do{syncAgain=false;const st=S,t=st.t||Date.now(),parts=cloudParts(st);
+      for(const [k,v] of Object.entries(parts)){if(dbSent[k]===v)continue;await dbBase.doc(k).set({json:v,t});dbSent[k]=v}
+      await dbIndex.set({fmt:2,t,top:topJson(st),parts:Object.keys(parts)});
+      for(const k of Object.keys(dbSent))if(!(k in parts)){try{await dbBase.doc(k).delete()}catch(e){}delete dbSent[k]}
+      syncErr=null}while(syncAgain)}
+    catch(e){syncErr=(e&&e.code)||'erreur'}
+    finally{syncing=null}
+    if(was!==syncErr&&view==='donnees')render()})();
+  return syncing}
 async function initDb(){
   try{
     const user=await cap('user'),db=await cap('db');
     if(!user||!db)return;const id=await user.id();if(!id)return;
-    dbDoc=db.doc('data/users/'+id+'/lamargeasuivre');
-    const snap=await dbDoc.get();
-    if(snap.exists){const d=snap.data();if(d&&d.json&&d.t>(S.t||0)){const loc=JSON.stringify(S);if(S.t)keepPrev(loc,'synchronisation');S=migrate(JSON.parse(d.json));render();}}
-    else await dbDoc.set({json:JSON.stringify(S),t:S.t||Date.now()});
-  }catch(e){}
+    const base=db.collection('data/users/'+id),idx=base.doc('lamargeasuivre');
+    const snap=await idx.get(),x=snap.exists?(snap.data()||{}):null;
+    if(x&&x.t>(S.t||0)){let st=null;
+      if(x.fmt===2){const parts={};for(const k of x.parts||[]){const p=await base.doc(k).get();if(!p.exists)throw new Error('morceau manquant : '+k);parts[k]=p.data().json}st=assemble(x,parts);dbSent=parts}
+      else if(x.json)st=JSON.parse(x.json);
+      if(st){const loc=JSON.stringify(S);if(S.t)keepPrev(loc,'synchronisation');S=migrate(st);try{localStorage.setItem('lmas.v1',JSON.stringify(S))}catch(e){}render()}}
+    dbBase=base;dbIndex=idx;
+    /* rien en ligne, ancien format, ou version locale plus récente : on envoie */
+    if(!x||x.fmt!==2||!(x.t>=(S.t||0)))await syncNow();
+  }catch(e){syncErr=(e&&e.code)||'erreur'}
 }
 
 /* ---------- calculs ---------- */
@@ -596,7 +625,7 @@ function vDonnees(){
    <div class="row"><label for="s_perte">Pertes ordinaires (%)</label><input class="n" id="s_perte" type="number" value="${d.perte}"></div>
    <div class="row"><label for="s_vol">Volume minimum pour conclure (g)</label><input class="n" id="s_vol" type="number" value="${d.volmin}"></div></div></div>
   <div class="card"><div class="sec"><h3>Mon activité</h3></div><p class="small mut">Affiché en en-tête du bilan PDF.</p><div class="list"><div><label class="small mut" for="pro_nom">Nom de l'activité</label><br><input class="w" id="pro_nom" value="${esc((S.pro||{}).nom||'')}"></div><div><label class="small mut" for="pro_ct">Coordonnées (téléphone, e-mail)</label><br><input class="w" id="pro_ct" value="${esc((S.pro||{}).ct||'')}"></div></div></div>
-  <div class="card"><div class="sec"><h3>Sauvegarde</h3></div><p class="small mut">Les données sont gardées dans ce navigateur${inClaude()?'':' (sur cet ordinateur uniquement : si tu effaces les données du navigateur, elles disparaissent)'}${dbDoc?' et dans ton espace privé de la page, visible de toi seul':''}. Enregistre régulièrement une sauvegarde dans un fichier et garde-la ailleurs (clé USB, Drive, e-mail).</p>${syncErr?`<div class="note" style="margin-bottom:8px"><b>Sauvegarde en ligne impossible</b> (${esc(syncErr)}). Tes données restent dans ce navigateur mais ne sont plus copiées en ligne, souvent parce qu'elles dépassent 256 Ko. Copie la sauvegarde ci-dessous et garde-la ailleurs, ou supprime un client que tu ne suis plus.</div>`:''}
+  <div class="card"><div class="sec"><h3>Sauvegarde</h3></div><p class="small mut">Les données sont gardées dans ce navigateur${inClaude()?'':' (sur cet ordinateur uniquement : si tu effaces les données du navigateur, elles disparaissent)'}${dbBase?' et dans ton espace privé de la page, visible de toi seul':''}. Enregistre régulièrement une sauvegarde dans un fichier et garde-la ailleurs (clé USB, Drive, e-mail).</p>${syncErr?`<div class="note" style="margin-bottom:8px"><b>Sauvegarde en ligne impossible</b> (${esc(syncErr)}). Tes données restent dans ce navigateur mais ne sont plus copiées en ligne. Si l'erreur parle de quota, l'espace en ligne est plein : supprime un client que tu ne suis plus. Enregistre en attendant la sauvegarde dans un fichier.</div>`:''}
    <div class="row"><button id="savef">Enregistrer la sauvegarde dans un fichier</button><button class="g" id="openf">Ouvrir un fichier de sauvegarde</button><input type="file" id="impf" accept=".json,application/json" hidden></div>
    <p class="small mut" style="margin:6px 0 12px"><span id="bkinfo">${S.lastBackup?'Dernier fichier de sauvegarde : '+new Date(S.lastBackup).toLocaleString('fr-FR')+'.':'Aucun fichier de sauvegarde enregistré pour l\'instant.'}</span> Le fichier contient tous les clients et sert aussi à passer de la version PC à la version Claude.</p>
    <details><summary class="small mut" style="cursor:pointer">Sauvegarde par copier-coller</summary>

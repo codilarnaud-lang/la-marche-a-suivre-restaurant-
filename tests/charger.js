@@ -5,7 +5,8 @@ const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
 
-function charger() {
+// options.claude : faux objet window.claude (voir fausseBase) pour tester la sauvegarde en ligne
+function charger(options = {}) {
   const html = fs.readFileSync(path.join(__dirname, '..', 'LaMargeASuivre.html'), 'utf8');
   const code = html.match(/<script>\n([\s\S]*?)<\/script>/)[1];
   const els = {};
@@ -17,11 +18,12 @@ function charger() {
     console, setTimeout, clearTimeout,
     document: { querySelector: s => els[s] || (els[s] = el()), querySelectorAll: () => [],
       addEventListener() {}, createElement: el, body: el(), activeElement: null },
-    location: { hash: '', protocol: 'file:' },
+    location: { hash: '', protocol: options.claude ? 'https:' : 'file:' },
     localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } },
     navigator: {}, addEventListener() {}, scrollY: 0, scrollTo() {},
   };
   ctx.window = ctx;
+  if (options.claude) ctx.claude = options.claude;
   vm.createContext(ctx);
   vm.runInContext(code, ctx, { filename: 'LaMargeASuivre.html' });
   // run('expression') évalue dans la page ; val('expression') renvoie une copie JSON utilisable par assert
@@ -30,4 +32,18 @@ function charger() {
   return { run, val, store };
 }
 
-module.exports = { charger };
+// Fausse base Claude partagée entre plusieurs pages : refuse, comme la vraie, un document de plus de 256 Kio.
+function fausseBase() {
+  const docs = new Map(), ecritures = [];
+  const ref = chemin => ({
+    get: async () => { const v = docs.get(chemin); return { exists: v !== undefined, data: () => (v === undefined ? undefined : JSON.parse(v)) }; },
+    set: async o => { const j = JSON.stringify(o); if (Buffer.byteLength(j) > 262144) { const e = new Error('document trop gros'); e.code = 'invalid_argument'; throw e; } docs.set(chemin, j); ecritures.push(chemin); },
+    delete: async () => { docs.delete(chemin); },
+  });
+  const db = { doc: ref, collection: c => ({ doc: id => ref(c + '/' + id) }) };
+  const user = { id: async () => 'u1' };
+  return { docs, ecritures, claude: { use: async n => (n === 'db' ? db : n === 'user' ? user : null) } };
+}
+const attendre = ms => new Promise(r => setTimeout(r, ms));
+
+module.exports = { charger, fausseBase, attendre };

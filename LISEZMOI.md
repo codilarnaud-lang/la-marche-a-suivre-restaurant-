@@ -12,6 +12,12 @@ Audit et suivi mensuel du ratio matière des restaurants, sur la partie alimenta
 
 Les ventes passées gardent les prix et les recettes en vigueur au moment de la vente : modifier une fiche, une préparation ou une formule ne réécrit pas les mois passés.
 
+## Contrôles
+
+- **Produits sans fiche** : la part du CA vendue sans recette est signalée (coût compté pour 0, ratio théorique sous-estimé), avec un badge « sans fiche » dans la carte.
+- **Formules comptées deux fois** : si une catégorie vend plus de portions que de couverts dans un mois, les plats choisis dans les formules sont probablement aussi listés sur le Z. La lecture automatique ignore ces lignes de détail.
+- **Libellés mémorisés** : un libellé de facture ou de Z associé une fois à un ingrédient ou à un produit est reconnu ensuite (lecture automatique et copier-coller). La liste se gère dans Ingrédients et données.
+
 ## La cible
 
 La cible est le ratio matière maximum que le restaurant peut se permettre. Les charges (personnel, loyer…) sont celles de tout le restaurant, et les boissons en paient une partie : dans l'onglet Cadrage, saisis le CA HT mensuel des boissons et leur coût d'achat (en % de leur CA).
@@ -37,6 +43,10 @@ Avec le stock du début et de la fin d'une période, le ratio réel utilise la c
 
 Les deux versions partagent le même format de sauvegarde, et lisent aussi les sauvegardes de RatioPizza. Pour passer de l'une à l'autre : onglet **Ingrédients et données**, « Enregistrer la sauvegarde dans un fichier », puis « Ouvrir un fichier de sauvegarde » dans l'autre version. Le copier-coller reste possible.
 
+## Sauvegarde en ligne (version Claude)
+
+Elle est découpée en un index, un document par client et un document par client et par mois de factures et de ventes : chaque morceau reste sous la limite de 256 Ko d'un document, même avec un an de factures d'un restaurant. Seuls les morceaux modifiés sont réécrits. L'ancien format, en un seul document, est repris automatiquement.
+
 ## Sur téléphone
 
 Utilise la version Claude : ouvre son lien dans l'application Claude (ou dans le navigateur du téléphone, connecté à ton compte Claude). Ses données sont sauvegardées dans ton espace privé en ligne : tu retrouves les mêmes clients sur ton PC et sur ton téléphone, à condition d'utiliser la version Claude sur les deux. La page s'adapte aux petits écrans.
@@ -57,7 +67,10 @@ Les données sont gardées par le navigateur. Garde toujours le même navigateur
 ```
 python3 outils/construire-bureau.py      # fabrique LaMargeASuivre-bureau.html à partir de LaMargeASuivre.html
 python3 outils/exemple-restaurant.py     # régénère les données d'exemple (brasserie fictive, trois mois)
+node --test                              # lance les tests (Node 18 ou plus, rien à installer)
 ```
+
+Les tests chargent le logiciel sans navigateur et vérifient des chiffres de référence contrôlés à la main : ratios, écarts, coût d'une préparation, catégories, formules, recettes et prix figés, cible avec boissons, stock, reprise d'une sauvegarde RatioPizza, contrôles, libellés mémorisés et sauvegarde en ligne découpée. Lance-les après chaque modification.
 
 La version ordinateur intègre jsPDF 2.5.1 (`vendor/`, licence MIT) pour que le bilan PDF fonctionne sans internet. Elle n'inclut pas pdf.js et xlsx, qui ne servent qu'à la lecture automatique.
 
