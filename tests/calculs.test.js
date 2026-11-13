@@ -117,3 +117,29 @@ test('tous les écrans se dessinent sans erreur', () => {
   run(`view='fiches';ficheMode='preps';render0();ficheMode='carte';rec='Menu du soir (entrée + plat + dessert)';render0()`);
   run(`period='2026-09';view='tableau';render0()`);
 });
+
+test('produit sans fiche : part du CA signalée', () => {
+  const { run, val } = charger();
+  assert.strictEqual(val(`calc(D(),'all').caSansFiche`), 0);
+  // plat du jour sans recette, 100 ventes à 16,50 € TTC = 1 500 € HT
+  run(`D().recs.push({nom:'Plat du jour',cat:'Plats',ttc:16.5,l:[]});D().docs.push({id:'t3',type:'vente',date:'2026-10-28',l:[{p:'Plat du jour',q:100}]})`);
+  const r = val(`(()=>{const r=calc(D(),'2026-10');return {sf:r.caSansFiche,part:r.partSansFiche,ca:r.ca}})()`);
+  assert.ok(r.sf >= 1500 - 1e-6, 'le CA direct du plat du jour est compté');
+  assert.ok(r.sf > 1500, 'et sa part dans les formules aussi');
+  proche(r.part, r.sf / r.ca * 100, 1e-9);
+  run(`view='tableau';render0()`);
+  assert.match(val(`document.querySelector('#main').innerHTML`), /Produits sans fiche technique/);
+});
+
+test('formules comptées deux fois : plus de plats que de couverts', () => {
+  const { run, val } = charger();
+  const alerte = () => val(`qualite(D()).filter(q=>/couverts/.test(q.txt)).map(q=>q.txt)`);
+  assert.deepStrictEqual(alerte(), [], 'aucune alerte sur l\'exemple');
+  // le Z d'octobre liste aussi les plats choisis dans les 920 formules d'octobre
+  run(`D().docs.find(x=>x.id==='v2026-10').l.push({p:'Bavette sauce échalote, frites',q:420},{p:'Suprême de volaille, purée',q:300},{p:'Pavé de saumon, légumes glacés',q:200})`);
+  const a = alerte();
+  assert.strictEqual(a.length, 1);
+  assert.match(a[0], /oct\. 2026/);
+  // les milliers sont séparés par une espace insécable fine (format français) : \s la reconnaît
+  assert.match(a[0], /2\s955 plats vendus pour 2\s250 couverts/);
+});
