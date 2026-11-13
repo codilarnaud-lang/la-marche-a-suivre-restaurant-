@@ -587,6 +587,8 @@ function vDonnees(){
   <div class="card"><div class="sec"><h3>Ingrédients et prix de référence</h3><button class="g" id="iadd">Ajouter un ingrédient</button></div><div class="tw"><table><thead><tr><th>Ingrédient</th><th>Unité fournisseur</th><th class="n">Contenu utile (g, ml, pièces)</th><th class="n">Prix HT / unité</th><th class="n">Rendement %</th><th class="n">Coût net / kg</th><th>Hors ratio</th><th></th></tr></thead><tbody>
   ${d.ings.map(i=>`<tr><td><input class="w" data-i="${i.id}" data-f="nom" value="${esc(i.nom)}">${i.prov?'<div class="ex">Prix à compléter : dépose une facture</div>':''}${ingFlags(i).map(t=>`<div class="ex">${esc(t)}</div>`).join('')}</td><td><input style="width:80px" data-i="${i.id}" data-f="unite" value="${esc(i.unite)}"></td><td class="n"><input class="n" type="number" data-i="${i.id}" data-f="g" value="${i.g}"></td><td class="n"><input class="n" type="number" step="0.01" data-i="${i.id}" data-f="prix" value="${i.prix}"></td><td class="n"><input class="n" type="number" data-i="${i.id}" data-f="rend" value="${Math.round((i.rend||1)*100)}"></td><td class="n">${fmt(i.prix/(i.g*(i.rend||1))*1000)} €</td><td><input type="checkbox" data-i="${i.id}" data-f="hr" ${i.hr?'checked':''} aria-label="${esc(i.nom)} hors ratio"></td><td><button class="x" data-idel="${i.id}">Supprimer</button></td></tr>`).join('')}
   </tbody></table></div><p class="small mut">Le rendement s'applique au poids brut (pommes de terre à éplucher 80 %, poireaux 60 %, oignons 90 %). Pour un produit égoutté, saisis le poids égoutté comme contenu. Ne divise jamais le prix par la quantité commandée.</p><p class="small mut">Hors ratio : article acheté mais qui n'est pas de l'alimentaire servi dans les plats (boissons, produits d'entretien, consommables). Il reste visible sur les factures mais n'est compté ni dans le ratio matière ni dans les écarts. Les desserts et leurs ingrédients restent dans le ratio.</p><p class="ex" id="ierr"></p></div>
+  ${(()=>{const A=d.alias||{},rows=[...Object.entries(A.ing||{}).map(([k,v])=>['ing',k,(d.ings.find(i=>i.id===v)||{}).nom||'?','Ingrédient']),...Object.entries(A.prod||{}).map(([k,v])=>['prod',k,v,'Produit'])];
+    return `<div class="card"><div class="sec"><h3>Libellés mémorisés</h3><span class="small mut">${rows.length} libellé(s)</span></div>${rows.length?`<div class="tw"><table><thead><tr><th>Libellé lu (facture ou Z)</th><th>Associé à</th><th>Type</th><th></th></tr></thead><tbody>${rows.map(([kind,k,v,t])=>`<tr><td>${esc(k)}</td><td>${esc(v)}</td><td>${t}</td><td><button class="x" data-aldel="${kind}|${esc(k)}">Oublier</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="small mut">Aucun pour l\'instant.</p>'}<p class="small mut">Quand tu valides un document lu, chaque libellé que tu as associé à un ingrédient ou à un produit est retenu : la fois suivante, il est reconnu tout seul, à la lecture automatique comme au copier-coller. Oublie un libellé s'il a été mal associé.</p></div>`})()}
   <div class="grid2"><div class="card"><div class="sec"><h3>Réglages du client</h3></div><div class="list">
    <div><label class="small mut" for="s_nom">Nom du client</label><br><input class="w" id="s_nom" value="${esc(d.nom)}"></div>
    <div class="row"><label for="s_tva">TVA vente (%)</label><input class="n" id="s_tva" type="number" step="0.5" value="${d.tva}"></div>
@@ -816,8 +818,8 @@ ${text?'Texte du document :\n'+text:'Le document est fourni en image.'}`;
     let type=o.type,note='';
     if(type!=='achat'&&type!=='vente'){type=lg.some(l=>l.montant_ht!=null)?'achat':'vente';note='Type de document incertain, vérifie-le.'}
     const lines=lg.map(l=>{const lab=String(l.libelle||'');const nm=String(l.nom_ingredient||'').trim();
-      const i=d.ings.find(z=>z.id===l.ingredient_id)||(type==='achat'?(findIng(d,nm||lab)||findIng(d,lab)):null);
-      const p=d.recs.find(r=>r.nom===(l.produit||l.pizza))||(type==='vente'?findPz(d,lab):null);
+      const i=(type==='achat'?aliasIng(d,lab):null)||d.ings.find(z=>z.id===l.ingredient_id)||(type==='achat'?(findIng(d,nm||lab)||findIng(d,lab)):null);
+      const p=(type==='vente'?aliasPz(d,lab):null)||d.recs.find(r=>r.nom===(l.produit||l.pizza))||(type==='vente'?findPz(d,lab):null);
       const nw={nom:nm||lab,unite:String(l.unite||'unité'),g:+l.contenu_par_unite||1000,tva:+l.tva||5.5,rendp:rendSuggest(nm||lab),hr:l.hors_ratio===true||hrSuggest(nm||lab)};
       return {label:lab,q:+l.quantite||0,ht:l.montant_ht!=null?+l.montant_ht:0,i:i?i.id:(type==='achat'&&lab?'__new':''),p:p?p.nom:(type==='vente'&&lab?'__new':''),nw,pnom:lab}});
     out.push({doc:{type,date:/^\d{4}-\d{2}-\d{2}$/.test(o.date||'')?o.date:'',ref:o.ref||'',fourn:o.fourn||'',total:o.total_ht!=null?+o.total_ht:null,couv:type==='vente'&&+o.couverts>0?Math.round(+o.couverts):null,lines},note})});
@@ -994,6 +996,11 @@ function parseNum(s){return parseFloat(String(s).replace(/\s/g,'').replace(',','
 const normS=s=>norm(s).split(' ').map(w=>w.length>3?w.replace(/s$/,''):w).join(' ');
 function findIng(d,n){const k=normS(n);if(!k)return null;return d.ings.find(i=>normS(i.nom)===k)||d.ings.find(i=>{const a=normS(i.nom);return a.startsWith(k)||k.startsWith(a)})}
 function findPz(d,n){const k=normS(n);return d.recs.find(r=>normS(r.nom)===k)}
+/* Libellés mémorisés : un libellé de facture ou de Z associé une fois à un ingrédient ou à un produit est reconnu ensuite.
+   d.alias = {ing:{libellé normalisé: id ingrédient}, prod:{libellé normalisé: nom du produit}} */
+function aliasIng(d,lab){const k=norm(lab||''),id=k&&d.alias&&d.alias.ing&&d.alias.ing[k];return id?d.ings.find(i=>i.id===id)||null:null}
+function aliasPz(d,lab){const k=norm(lab||''),n=k&&d.alias&&d.alias.prod&&d.alias.prod[k];return n?d.recs.find(r=>r.nom===n)||null:null}
+function remember(d,kind,lab,v){const k=norm(lab||'');if(!k||!v)return;const auto=kind==='ing'?(findIng(d,lab)||{}).id:(findPz(d,lab)||{}).nom;if(auto===v)return;d.alias=d.alias||{};(d.alias[kind]=d.alias[kind]||{})[k]=v}
 function findPrep(d,n){const k=normS(n);return k?(d.preps||[]).find(p=>normS(p.nom)===k):null}
 
 document.addEventListener('click',e=>{
@@ -1010,7 +1017,7 @@ document.addEventListener('click',e=>{
       if(p.lines.some(l=>!l.i||!(l.g>0))){x.err='Complète l\'ingrédient et le grammage de chaque ligne ('+p.nom+').';return render()}}
     drafts=drafts.filter(z=>z.id!==x.id);
     return change(()=>{const getI=l=>{if(l.i!=='__new')return l.i;const e=findIng(d,l.label);if(e)return e.id;const n={id:uid(),nom:l.label,unite:'kg',g:1000,prix:0,rend:1,tva:5.5,prov:true};d.ings.push(n);return n.id};ps.forEach(p=>{let ex=findPz(d,p.nom);const cat=(p.cat||'').trim();if(cat){d.cats=d.cats||[];if(!d.cats.includes(cat))d.cats.push(cat)}if(!ex){ex={nom:p.nom,cat:cat||'À classer',ttc:p.ttc,l:[]};d.recs.push(ex)}else if(cat&&!isFormule(ex))ex.cat=cat
-      if(p.ttc>0){logPrix(d,ex.nom,ex.ttc,p.ttc);ex.ttc=p.ttc}if(p.since)ex.since=p.since;if(p.lines.length&&!isFormule(ex)){figeTout(d,ex.nom);ex.l=p.lines.map(l=>{const o={i:getI(l),g:+l.g};if(l.pes>0)o.pes=+l.pes;return o})}})},()=>'Fiches techniques mises à jour ('+ps.length+' produit'+(ps.length>1?'s':'')+'). Tous les coûts et ratios sont recalculés.')}
+      if(p.ttc>0){logPrix(d,ex.nom,ex.ttc,p.ttc);ex.ttc=p.ttc}if(p.since)ex.since=p.since;if(p.lines.length&&!isFormule(ex)){figeTout(d,ex.nom);ex.l=p.lines.map(l=>{const o={i:getI(l),g:+l.g};if(l.pes>0)o.pes=+l.pes;if(d.ings.some(i=>i.id===o.i))remember(d,'ing',l.label,o.i);return o})}})},()=>'Fiches techniques mises à jour ('+ps.length+' produit'+(ps.length>1?'s':'')+'). Tous les coûts et ratios sont recalculés.')}
   if(t.dataset.drixok){const x=drafts.find(z=>z.id===t.dataset.drixok);drafts=drafts.filter(z=>z.id!==x.id);return change(()=>{d.index=x.doc.factures.map(f=>({...f}))},()=>{const c=controle(d);return `Index enregistré : ${c.rows.length} factures attendues, ${c.ok} reçues et conformes, ${c.missing} manquantes, ${c.diff} avec un total différent.`})}
   if(t.dataset.drcadok){const x=drafts.find(z=>z.id===t.dataset.drcadok);drafts=drafts.filter(z=>z.id!==x.id);return change(()=>{d.cad=Object.assign({},d.cad,x.doc.cad)},(b,a)=>`Cadrage mis à jour. Cible de ratio : <b>${pc(a.c)}</b> (avant : ${pc(b.c)}).`)}
   if(t.dataset.drx){drafts=drafts.filter(z=>z.id!==t.dataset.drx);return render()}
@@ -1029,13 +1036,13 @@ document.addEventListener('click',e=>{
       if(isA){const out=[];
         okL.forEach(l=>{let id=l.i;const nw=l.nw||{};
           if(id==='__new'){const ex=findIng(d,nw.nom);if(ex)id=ex.id;else{const n={id:uid(),nom:nw.nom,unite:nw.unite||'unité',g:+nw.g||1,prix:l.q?l.ht/l.q:0,rend:Math.min(1,(+nw.rendp||100)/100),tva:+nw.tva||5.5};if(nw.hr)n.hr=true;if(/bo[iî]te/i.test(n.nom))n.pc=true;d.ings.push(n);id=n.id;created++}}
-          out.push({i:id,q:+l.q,ht:+l.ht,nw})});
+          out.push({i:id,q:+l.q,ht:+l.ht,nw});remember(d,'ing',l.label,id)});
         out.forEach(l=>{const i=d.ings.find(z=>z.id===l.i);if(!i)return;
           if(i.prov){delete i.prov;if(l.nw.unite)i.unite=l.nw.unite;if(+l.nw.g>0)i.g=+l.nw.g;if(+l.nw.tva)i.tva=+l.nw.tva;if(+l.nw.rendp&&+l.nw.rendp<100)i.rend=+l.nw.rendp/100}
           const later=d.docs.some(o=>o.type==='achat'&&o.date>k.date&&o.l.some(z=>z.i===i.id));
           if(!later&&l.q>0)i.prix=Math.round(l.ht/l.q*100)/100});
         d.docs.push({id:uid(),type:'achat',date:k.date,ref:k.ref||'Facture',fourn:k.fourn||'Fournisseur',l:out.map(l=>({i:l.i,q:l.q,ht:l.ht}))})}
-      else{const out=okL.map(l=>{let p=l.p;if(p==='__new'){const ex=findPz(d,l.pnom);if(ex)p=ex.nom;else{d.recs.push({nom:l.pnom,cat:'À classer',ttc:0,l:[]});p=l.pnom;created++}}return {p,q:+l.q}});
+      else{const out=okL.map(l=>{let p=l.p;if(p==='__new'){const ex=findPz(d,l.pnom);if(ex)p=ex.nom;else{d.recs.push({nom:l.pnom,cat:'À classer',ttc:0,l:[]});p=l.pnom;created++}}remember(d,'prod',l.label,p);return {p,q:+l.q}});
         d.docs.push({id:uid(),type:'vente',date:k.date,ref:k.ref||'Rapport de ventes',fourn:'Caisse',l:stampPu(d,out)});if(+k.couv>0){d.couv=d.couv||{};d.couv[k.date.slice(0,7)]=Math.round(+k.couv)}}
     },(b,a)=>docMsg(k.date)(b,a)+(created?' '+created+(isA?' ingrédient(s) ajouté(s) à la liste.':' produit(s) créé(s) dans « À classer », sans recette : dépose la carte et les recettes, ou complète les fiches.'):''))}
   if(t.dataset.per){period=t.dataset.per;banner=null;return render()}
@@ -1062,17 +1069,18 @@ document.addEventListener('click',e=>{
     return change(()=>{d.docs.push({id:uid(),type:'vente',date,ref:$('#vr').value||'Rapport de ventes',fourn:'Caisse',l:stampPu(d,l)});if(cv>0){d.couv=d.couv||{};d.couv[date.slice(0,7)]=Math.round(cv)}},docMsg(date))}
   if(t.id==='cfb'||t.id==='cvb'){const isF=t.id==='cfb',txt=$(isF?'#cf':'#cv').value.trim(),date=$(isF?'#cfd':'#cvd').value;const bad=[],l=[];
     txt.split(/\n+/).filter(x=>x.trim()).forEach((ln,k)=>{const p=ln.split(/[;\t]/).length>1?ln.split(/[;\t]/):ln.split(',');
-      if(isF){const i=findIng(d,p[0]),q=parseNum(p[1]),h=parseNum(p[2]);if(!i||!(q>0)||isNaN(h))bad.push(k+1);else l.push({i:i.id,q,ht:h})}
-      else{const z=findPz(d,p[0]),q=parseNum(p[1]);if(!z||!(q>0))bad.push(k+1);else l.push({p:z.nom,q})}});
+      if(isF){const i=aliasIng(d,p[0])||findIng(d,p[0]),q=parseNum(p[1]),h=parseNum(p[2]);if(!i||!(q>0)||isNaN(h))bad.push(k+1);else l.push({i:i.id,q,ht:h})}
+      else{const z=aliasPz(d,p[0])||findPz(d,p[0]),q=parseNum(p[1]);if(!z||!(q>0))bad.push(k+1);else l.push({p:z.nom,q})}});
     if(bad.length||!l.length||!date){$('#cerr').textContent=!l.length&&!bad.length?'Rien à importer.':'Lignes non reconnues : '+bad.join(', ')+'. Vérifie le nom (comme dans Ingrédients ou Fiches) et les nombres.';return}
     return change(()=>d.docs.push(isF?{id:uid(),type:'achat',date,ref:'Import',fourn:$('#cff').value||'Import',l}:{id:uid(),type:'vente',date,ref:'Import ventes',fourn:'Caisse',l:stampPu(d,l)}),docMsg(date))}
   if(t.id==='radd')return change(()=>{let n='Nouveau produit '+(d.recs.length+1);while(d.recs.some(x=>x.nom===n))n+=' bis';const cur=d.recs.find(x=>x.nom===rec);d.recs.push({nom:n,cat:(cur&&!isFormule(cur)&&cur.cat)||catList(d)[0]||'Plats',ttc:10,l:[]});rec=n});
+  if(t.dataset.aldel){const [kind,k]=t.dataset.aldel.split('|');return change(()=>{if(d.alias&&d.alias[kind])delete d.alias[kind][k]},()=>'Libellé oublié : il sera de nouveau proposé à la vérification.')}
   if(t.id==='rdel'){if(t.dataset.arm!=='1'){const nv=d.docs.filter(x=>x.type==='vente'&&x.l.some(l=>l.p===rec)).length;t.dataset.arm='1';t.textContent=nv?'Confirmer : '+nv+' relevé(s) de ventes le mentionnent, ils sortiront des calculs':'Confirmer la suppression';return}figeTout(d,rec);return change(()=>{d.recs=d.recs.filter(r=>r.nom!==rec);d.recs.forEach(f=>{if(isFormule(f))(f.slots||[]).forEach(s=>{if(s.choix)s.choix=s.choix.filter(n=>n!==rec)})});rec=null})}
   if(t.id==='ladd')return change(()=>{if(d.ings[0])editRecette(d,rec,r=>r.l.push({i:d.ings[0].id,g:0}))});
   if(t.dataset.lx!=null)return change(()=>editRecette(d,rec,r=>r.l.splice(+t.dataset.lx,1)));
   if(t.id==='rpast')return change(()=>d.docs.forEach(x=>{if(x.type==='vente')x.l.forEach(l=>{if(l.p===rec)delete l.rl})}),()=>`Composition actuelle de ${esc(rec)} appliquée à toutes les ventes passées. Ratios théoriques et écarts recalculés.`);
   if(t.id==='iadd')return change(()=>d.ings.push({id:uid(),nom:'Nouvel ingrédient',unite:'kg',g:1000,prix:1,rend:1,tva:5.5}));
-  if(t.dataset.idel){const used=d.recs.some(r=>(r.l||[]).some(l=>l.i===t.dataset.idel))||(d.preps||[]).some(p=>p.l.some(l=>l.i===t.dataset.idel))||d.docs.some(x=>x.l.some(l=>l.i===t.dataset.idel))||Object.values(d.inv||{}).some(v=>v[t.dataset.idel]);if(used){$('#ierr').textContent='Cet ingrédient est utilisé dans une recette, une préparation, une facture ou un inventaire. Retire-le d\'abord de ces endroits.';return}return change(()=>d.ings=d.ings.filter(i=>i.id!==t.dataset.idel))}
+  if(t.dataset.idel){const used=d.recs.some(r=>(r.l||[]).some(l=>l.i===t.dataset.idel))||(d.preps||[]).some(p=>p.l.some(l=>l.i===t.dataset.idel))||d.docs.some(x=>x.l.some(l=>l.i===t.dataset.idel))||Object.values(d.inv||{}).some(v=>v[t.dataset.idel]);if(used){$('#ierr').textContent='Cet ingrédient est utilisé dans une recette, une préparation, une facture ou un inventaire. Retire-le d\'abord de ces endroits.';return}return change(()=>{d.ings=d.ings.filter(i=>i.id!==t.dataset.idel);if(d.alias&&d.alias.ing)Object.keys(d.alias.ing).forEach(k=>{if(d.alias.ing[k]===t.dataset.idel)delete d.alias.ing[k]})})}
   if(t.id==='apply')return change(()=>{d.recs.forEach(r=>{if(d.sim[r.nom]!=null){logPrix(d,r.nom,r.ttc,+d.sim[r.nom]);r.ttc=+d.sim[r.nom]}});d.sim={}},()=>'Nouveaux prix appliqués à la carte. Tous les ratios sont recalculés.');
   if(t.id==='reset')return change(()=>d.sim={});
   if(t.id==='pdf'){t.textContent='Création du PDF…';makePdf().then(m=>{t.textContent=m}).catch(()=>{t.textContent='PDF impossible ici'});return}
@@ -1105,7 +1113,7 @@ document.addEventListener('change',e=>{
   if(t.id==='cl'){drafts=[];S.cur=t.value;period='all';rec=null;banner=null;save();return render()}
   if(t.dataset.f){const i=d.ings.find(x=>x.id===t.dataset.i);let v=t.value;if(t.dataset.f==='hr')v=t.checked;else if(t.dataset.f==='nom'||t.dataset.f==='unite'){if(!v.trim())return render()}else{v=parseNum(v);if(!(v>0))return render();if(t.dataset.f==='rend')v=Math.min(v,100)/100}
     return change(()=>i[t.dataset.f]=v,(b,a)=>{const x=b.m[b.m.length-1],y=a.m[a.m.length-1];return x&&y&&x[1]!=null&&y[1]!=null?`Ingrédient modifié. Ratio réel de ${mlab(y[0])} : ${pc(x[1])} → <b>${pc(y[1])}</b>.`:'Ingrédient modifié.'})}
-  if(t.id==='rn'){const v=t.value.trim();if(!v||d.recs.some(r=>r.nom===v))return render();return change(()=>{const r=d.recs.find(r=>r.nom===rec),old=r.nom;d.docs.forEach(x=>x.l.forEach(l=>{if(l.p===old)l.p=v}));d.recs.forEach(f=>{if(isFormule(f))(f.slots||[]).forEach(s=>{if(s.choix)s.choix=s.choix.map(n=>n===old?v:n)})});if(d.sim&&d.sim[old]!=null){d.sim[v]=d.sim[old];delete d.sim[old]}r.nom=v;rec=v})}
+  if(t.id==='rn'){const v=t.value.trim();if(!v||d.recs.some(r=>r.nom===v))return render();return change(()=>{const r=d.recs.find(r=>r.nom===rec),old=r.nom;d.docs.forEach(x=>x.l.forEach(l=>{if(l.p===old)l.p=v}));d.recs.forEach(f=>{if(isFormule(f))(f.slots||[]).forEach(s=>{if(s.choix)s.choix=s.choix.map(n=>n===old?v:n)})});if(d.sim&&d.sim[old]!=null){d.sim[v]=d.sim[old];delete d.sim[old]}if(d.alias&&d.alias.prod)Object.keys(d.alias.prod).forEach(k=>{if(d.alias.prod[k]===old)d.alias.prod[k]=v});r.nom=v;rec=v})}
   if(t.id==='rc'){const v=t.value.trim();if(!v)return render();return change(()=>{const r=d.recs.find(r=>r.nom===rec);r.cat=v;d.cats=d.cats||[];if(!d.cats.includes(v))d.cats.push(v)})}
   if(t.id==='rt')return change(()=>{const r=d.recs.find(r=>r.nom===rec);const v=t.value.trim();if(v==='')delete r.tva;else{const n=parseNum(v);if(n>=0&&n<=30)r.tva=n}});
   if(t.id==='prn'){const v=t.value.trim();if(!v)return render();return change(()=>{prepOf(d,prepSel).nom=v})}

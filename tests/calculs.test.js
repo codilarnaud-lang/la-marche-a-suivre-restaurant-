@@ -143,3 +143,19 @@ test('formules comptées deux fois : plus de plats que de couverts', () => {
   // les milliers sont séparés par une espace insécable fine (format français) : \s la reconnaît
   assert.match(a[0], /2\s955 plats vendus pour 2\s250 couverts/);
 });
+
+test('libellés mémorisés : reconnus, renommés, oubliés', () => {
+  const { run, val } = charger();
+  assert.strictEqual(val(`aliasIng(D(),'BAVETTE ALOYAU VBF S/V KG')`), null);
+  run(`remember(D(),'ing','BAVETTE ALOYAU VBF S/V KG','bavette');remember(D(),'prod','MENU MIDI','Formule midi (entrée + plat)')`);
+  assert.strictEqual(val(`aliasIng(D(),'Bavette aloyau VBF s/v kg').id`), 'bavette', 'casse et ponctuation ignorées');
+  assert.strictEqual(val(`aliasPz(D(),'menu midi').nom`), 'Formule midi (entrée + plat)');
+  // un libellé déjà reconnu par son nom n'encombre pas la liste
+  run(`remember(D(),'ing','Beurre doux','beurre')`);
+  assert.strictEqual(val(`Object.keys(D().alias.ing).length`), 1);
+  // renommer le produit suit le libellé
+  run(`var d=D(),r=d.recs.find(x=>x.nom==='Formule midi (entrée + plat)');Object.keys(d.alias.prod).forEach(k=>{if(d.alias.prod[k]===r.nom)d.alias.prod[k]='Formule déjeuner'});r.nom='Formule déjeuner'`);
+  assert.strictEqual(val(`aliasPz(D(),'MENU MIDI').nom`), 'Formule déjeuner');
+  run(`view='donnees';render0()`);
+  assert.match(val(`document.querySelector('#main').innerHTML`), /Libellés mémorisés/);
+});
