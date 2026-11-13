@@ -525,20 +525,20 @@ claudeReady.then(ok=>{if(ok&&typeof S!=='undefined'&&S&&typeof render==='functio
 /* ---------- état et sauvegarde ---------- */
 let S=null, view='tableau', period='all', rec=null, banner=null, saveT=null, dbDoc=null, syncErr=null;
 function blank(nom){return {nom,tva:10,seuil:10,volmin:20000,perte:4,cible:null,cad:{perso:0,loyer:0,energie:0,autres:0,emprunt:0,verse:0},var:{plat:0,com:0,cb:0},cats:['Entrées','Plats','Desserts'],ings:[],recs:[],preps:[],docs:[],couv:{},sim:{}}}
-/* Les données de RatioPizza (version 1) restent lisibles : leurs produits sans catégorie sont rangés dans « Pizzas ».
-   Les clés de stockage (rp.v1, rp.prev, ratiopizza) ne changent pas, pour retrouver les données déjà saisies. */
+/* Les sauvegardes de RatioPizza (version 1) restent lisibles : leurs produits sans catégorie sont rangés dans « Pizzas ».
+   La marge à suivre a ses propres clés de stockage (lmas.v1, lmas.prev, lamargeasuivre) : elle ne partage jamais ses données avec RatioPizza. */
 function migrate(st){if(!st||!st.clients)return st;Object.values(st.clients).forEach(c=>{if(!c)return;c.recs=c.recs||[];c.preps=c.preps||[];c.couv=c.couv||{};
   if(!(st.v>=2))c.recs.forEach(r=>{if(!r.cat)r.cat=r.kind==='formule'?'Formules':'Pizzas'});
   if(!Array.isArray(c.cats))c.cats=[...new Set(c.recs.filter(r=>r.kind!=='formule').map(r=>r.cat).filter(Boolean))]});st.v=2;return st}
 function load(){
-  try{const r=localStorage.getItem('rp.v1');if(r){S=JSON.parse(r)}}catch(e){}
+  try{const r=localStorage.getItem('lmas.v1');if(r){S=JSON.parse(r)}}catch(e){}
   if(!S||!S.clients){const id=uid();S={cur:id,t:0,v:2,clients:{[id]:JSON.parse(JSON.stringify(SEED))}}}
   migrate(S)
 }
 function D(){return S.clients[S.cur]}
 function save(){
   S.t=Date.now();
-  try{localStorage.setItem('rp.v1',JSON.stringify(S))}catch(e){}
+  try{localStorage.setItem('lmas.v1',JSON.stringify(S))}catch(e){}
   clearTimeout(saveT);saveT=setTimeout(async()=>{if(!dbDoc)return;const was=syncErr;try{await dbDoc.set({json:JSON.stringify(S),t:S.t});syncErr=null}catch(e){syncErr=(e&&e.code)||'erreur'}if(was!==syncErr&&view==='donnees')render()},900);
 }
 /* Sauvegarde dans un fichier JSON daté : capacité « downloads » dans Claude, lien de téléchargement ailleurs */
@@ -554,13 +554,13 @@ async function saveBackupFile(btn){
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();
   setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000);done();say('Fichier téléchargé : '+name)}
 /* Garde la version remplacée (restauration, synchronisation) pour pouvoir revenir en arrière */
-function keepPrev(json,why){try{localStorage.setItem('rp.prev',JSON.stringify({t:Date.now(),why,json}))}catch(e){}}
-function getPrev(){try{const p=JSON.parse(localStorage.getItem('rp.prev')||'null');return p&&p.json?p:null}catch(e){return null}}
+function keepPrev(json,why){try{localStorage.setItem('lmas.prev',JSON.stringify({t:Date.now(),why,json}))}catch(e){}}
+function getPrev(){try{const p=JSON.parse(localStorage.getItem('lmas.prev')||'null');return p&&p.json?p:null}catch(e){return null}}
 async function initDb(){
   try{
     const user=await cap('user'),db=await cap('db');
     if(!user||!db)return;const id=await user.id();if(!id)return;
-    dbDoc=db.doc('data/users/'+id+'/ratiopizza');
+    dbDoc=db.doc('data/users/'+id+'/lamargeasuivre');
     const snap=await dbDoc.get();
     if(snap.exists){const d=snap.data();if(d&&d.json&&d.t>(S.t||0)){const loc=JSON.stringify(S);if(S.t)keepPrev(loc,'synchronisation');S=migrate(JSON.parse(d.json));render();}}
     else await dbDoc.set({json:JSON.stringify(S),t:S.t||Date.now()});

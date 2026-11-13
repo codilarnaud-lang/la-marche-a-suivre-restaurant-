@@ -1,6 +1,6 @@
 # La marge à suivre
 
-Audit et suivi mensuel du ratio matière des restaurants, sur la partie alimentaire seulement (les boissons sont exclues) : factures, ventes, fiches techniques, écarts, stock, cible et bilan PDF. Anciennement RatioPizza : une pizzeria est un restaurant dont les produits sont dans la catégorie « Pizzas ».
+Audit et suivi mensuel du ratio matière des restaurants, sur la partie alimentaire seulement (les boissons sont exclues) : factures, ventes, fiches techniques, écarts, stock, cible et bilan PDF. Version restaurant de RatioPizza, tenue à part : elle a ses propres données et ne touche pas à RatioPizza. Pour y reprendre un client RatioPizza, enregistre une sauvegarde dans RatioPizza et ouvre-la ici : ses produits sont rangés dans la catégorie « Pizzas ».
 
 ## La carte
 
@@ -37,9 +37,9 @@ Le fichier `LaMargeASuivre-bureau.html` n'est pas fait pour le téléphone : les
 
 ## Utiliser la version ordinateur
 
-1. Avant de remplacer un ancien fichier (RatioPizza ou La marge à suivre), ouvre-le et clique sur « Enregistrer la sauvegarde dans un fichier ».
+1. Garde ton fichier RatioPizza : les deux logiciels sont indépendants et n'utilisent pas les mêmes données.
 2. Télécharge `LaMargeASuivre-bureau.html` et range-le dans un dossier fixe (par exemple `Documents\La marge à suivre`).
-3. Double-clique dessus : il s'ouvre dans ton navigateur (Chrome, Edge ou Firefox). Si tes données n'apparaissent pas, ouvre ta sauvegarde avec « Ouvrir un fichier de sauvegarde ».
+3. Double-clique dessus : il s'ouvre dans ton navigateur (Chrome, Edge ou Firefox), avec la brasserie d'exemple. Pour y reprendre un client, ouvre sa sauvegarde avec « Ouvrir un fichier de sauvegarde ».
 4. Ajoute-le à tes favoris pour le rouvrir facilement.
 
 Les données sont gardées par le navigateur. Garde toujours le même navigateur et ne déplace pas le fichier. Enregistre régulièrement la sauvegarde dans un fichier et garde-le ailleurs (clé USB, Drive, e-mail) : effacer les données du navigateur efface aussi celles du logiciel.
