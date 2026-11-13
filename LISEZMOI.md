@@ -1,6 +1,16 @@
-# RatioPizza
+# La marge à suivre
 
-Audit et suivi mensuel du ratio matière des pizzerias : factures, ventes, fiches techniques, écarts, stock, cible et bilan PDF.
+Audit et suivi mensuel du ratio matière des restaurants, sur la partie alimentaire seulement (les boissons sont exclues) : factures, ventes, fiches techniques, écarts, stock, cible et bilan PDF. Anciennement RatioPizza : une pizzeria est un restaurant dont les produits sont dans la catégorie « Pizzas ».
+
+## La carte
+
+- **Catégories** : chaque produit est rangé dans une rubrique de la carte (Entrées, Plats, Desserts, Pizzas…). Le ratio par catégorie s'affiche dans le Tableau de bord, les Fiches techniques et le bilan PDF.
+- **Préparations de base** : sous-recettes réutilisables (sauce, fond, pâte, vinaigrette), avec leur poids obtenu. On les ajoute dans les fiches comme un ingrédient ; pour les écarts d'achats, elles sont remplacées par leurs ingrédients.
+- **Formules et menus** : un prix fixe et des créneaux (entrée, plat, dessert). Chaque créneau propose une catégorie entière ou seulement les produits cochés. Le coût d'une formule est la moyenne des produits proposés, pondérée par leurs ventes à la carte.
+- **TVA par produit** : vide, le produit prend la TVA générale du client.
+- **Couverts** : saisis par mois dans le Tableau de bord ou avec le relevé de ventes, ils donnent le ticket moyen et le coût matière par couvert.
+
+Les ventes passées gardent les prix et les recettes en vigueur au moment de la vente : modifier une fiche, une préparation ou une formule ne réécrit pas les mois passés.
 
 ## Stock de fin de mois
 
@@ -14,31 +24,33 @@ Avec le stock du début et de la fin d'une période, le ratio réel utilise la c
 
 | Fichier | Où l'utiliser | Lecture automatique des documents | Sauvegarde |
 |---|---|---|---|
-| `RatioPizza.html` | Publié comme artefact dans Claude | Oui (PDF, photo, CSV, Excel) | Navigateur + espace privé en ligne |
-| `RatioPizza-bureau.html` | Sur ton ordinateur, sans internet | Non : saisie manuelle ou copier-coller | Navigateur de cet ordinateur |
+| `LaMargeASuivre.html` | Publié comme artefact dans Claude | Oui (PDF, photo, CSV, Excel) | Navigateur + espace privé en ligne |
+| `LaMargeASuivre-bureau.html` | Sur ton ordinateur, sans internet | Non : saisie manuelle ou copier-coller | Navigateur de cet ordinateur |
 
-Les deux versions partagent le même format de sauvegarde. Pour passer de l'une à l'autre : onglet **Ingrédients et données**, « Enregistrer la sauvegarde dans un fichier », puis « Ouvrir un fichier de sauvegarde » dans l'autre version. Le copier-coller reste possible.
+Les deux versions partagent le même format de sauvegarde, et lisent aussi les sauvegardes de RatioPizza. Pour passer de l'une à l'autre : onglet **Ingrédients et données**, « Enregistrer la sauvegarde dans un fichier », puis « Ouvrir un fichier de sauvegarde » dans l'autre version. Le copier-coller reste possible.
 
 ## Sur téléphone
 
 Utilise la version Claude : ouvre son lien dans l'application Claude (ou dans le navigateur du téléphone, connecté à ton compte Claude). Ses données sont sauvegardées dans ton espace privé en ligne : tu retrouves les mêmes clients sur ton PC et sur ton téléphone, à condition d'utiliser la version Claude sur les deux. La page s'adapte aux petits écrans.
 
-Le fichier `RatioPizza-bureau.html` n'est pas fait pour le téléphone : les téléphones ouvrent mal les fichiers HTML enregistrés et n'y gardent pas les données de façon fiable.
+Le fichier `LaMargeASuivre-bureau.html` n'est pas fait pour le téléphone : les téléphones ouvrent mal les fichiers HTML enregistrés et n'y gardent pas les données de façon fiable.
 
 ## Utiliser la version ordinateur
 
-1. Télécharge `RatioPizza-bureau.html` et range-le dans un dossier fixe (par exemple `Documents\RatioPizza`).
-2. Double-clique dessus : il s'ouvre dans ton navigateur (Chrome, Edge ou Firefox).
-3. Ajoute-le à tes favoris pour le rouvrir facilement.
+1. Avant de remplacer un ancien fichier (RatioPizza ou La marge à suivre), ouvre-le et clique sur « Enregistrer la sauvegarde dans un fichier ».
+2. Télécharge `LaMargeASuivre-bureau.html` et range-le dans un dossier fixe (par exemple `Documents\La marge à suivre`).
+3. Double-clique dessus : il s'ouvre dans ton navigateur (Chrome, Edge ou Firefox). Si tes données n'apparaissent pas, ouvre ta sauvegarde avec « Ouvrir un fichier de sauvegarde ».
+4. Ajoute-le à tes favoris pour le rouvrir facilement.
 
-Les données sont gardées par le navigateur, pour ce fichier à cet emplacement. Garde toujours le même navigateur et ne déplace pas le fichier. Enregistre régulièrement la sauvegarde dans un fichier et garde-le ailleurs (clé USB, Drive, e-mail) : effacer les données du navigateur efface aussi celles de RatioPizza.
+Les données sont gardées par le navigateur. Garde toujours le même navigateur et ne déplace pas le fichier. Enregistre régulièrement la sauvegarde dans un fichier et garde-le ailleurs (clé USB, Drive, e-mail) : effacer les données du navigateur efface aussi celles du logiciel.
 
-## Mettre à jour la version ordinateur
-
-`RatioPizza-bureau.html` est fabriqué à partir de `RatioPizza.html` :
+## Outils
 
 ```
-python3 outils/construire-bureau.py
+python3 outils/construire-bureau.py      # fabrique LaMargeASuivre-bureau.html à partir de LaMargeASuivre.html
+python3 outils/exemple-restaurant.py     # régénère les données d'exemple (brasserie fictive, trois mois)
 ```
 
-Le script intègre jsPDF 2.5.1 (`vendor/`, licence MIT) pour que le bilan PDF fonctionne sans internet. Il retire pdf.js et xlsx, qui ne servent qu'à la lecture automatique.
+La version ordinateur intègre jsPDF 2.5.1 (`vendor/`, licence MIT) pour que le bilan PDF fonctionne sans internet. Elle n'inclut pas pdf.js et xlsx, qui ne servent qu'à la lecture automatique.
+
+Les données d'exemple sont calculées à partir des recettes et des ventes : les factures correspondent à la consommation théorique, avec une surconsommation volontaire sur la bavette (+13 %) et la crème (+11 %), et les restes de conditionnements entamés sont comptés aux inventaires de fin de mois.

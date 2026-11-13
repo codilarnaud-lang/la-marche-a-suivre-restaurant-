@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Construit RatioPizza-bureau.html : la version à enregistrer sur un ordinateur.
+"""Construit LaMargeASuivre-bureau.html : la version à enregistrer sur un ordinateur.
 
 - Document HTML complet (la version Claude reçoit son squelette à la publication).
 - jsPDF intégré au fichier : le bilan PDF fonctionne sans internet.
@@ -10,7 +10,7 @@ Usage : python3 outils/construire-bureau.py
 from pathlib import Path
 
 racine = Path(__file__).resolve().parent.parent
-src = (racine / "RatioPizza.html").read_text(encoding="utf-8")
+src = (racine / "LaMargeASuivre.html").read_text(encoding="utf-8")
 jspdf = (racine / "vendor" / "jspdf-2.5.1.umd.min.js").read_text(encoding="utf-8")
 assert "</script" not in jspdf.lower()
 
@@ -30,6 +30,6 @@ page = ('<!doctype html>\n<html lang="fr">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width,initial-scale=1">\n'
         '<style>body{margin:0}[hidden]{display:none!important}</style>\n</head>\n<body>\n'
         + src + '\n</body>\n</html>\n')
-sortie = racine / "RatioPizza-bureau.html"
+sortie = racine / "LaMargeASuivre-bureau.html"
 sortie.write_text(page, encoding="utf-8")
 print(f"{sortie.name} : {len(page.encode('utf-8')) // 1024} Ko")
