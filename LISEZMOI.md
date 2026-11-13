@@ -12,6 +12,14 @@ Audit et suivi mensuel du ratio matière des restaurants, sur la partie alimenta
 
 Les ventes passées gardent les prix et les recettes en vigueur au moment de la vente : modifier une fiche, une préparation ou une formule ne réécrit pas les mois passés.
 
+## La cible
+
+La cible est le ratio matière maximum que le restaurant peut se permettre. Les charges (personnel, loyer…) sont celles de tout le restaurant, et les boissons en paient une partie : dans l'onglet Cadrage, saisis le CA HT mensuel des boissons et leur coût d'achat (en % de leur CA).
+
+Cible = (CA total − charges − frais proportionnels − achat des boissons) ÷ CA alimentaire.
+
+Sans boissons saisies, toutes les charges pèsent sur la nourriture et la cible est trop sévère : le Cadrage le signale.
+
 ## Stock de fin de mois
 
 Deux façons de le saisir, au choix pour chaque mois :

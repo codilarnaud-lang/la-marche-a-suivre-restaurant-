@@ -161,8 +161,9 @@ for k, m in enumerate(MOIS):
 
 seed = {
     "nom": "Brasserie Exemple (fictif)", "tva": 10, "seuil": 10, "volmin": 20000, "perte": 4, "cible": None,
-    "cad": {"perso": 23000, "loyer": 3500, "energie": 1900, "autres": 2100, "emprunt": 1200, "verse": 2500},
+    "cad": {"perso": 30500, "loyer": 4500, "energie": 2600, "autres": 3200, "emprunt": 1500, "verse": 3500},
     "var": {"plat": 0, "com": 0, "cb": 1},
+    "bois": {"ca": 16000, "ratio": 26},
     "cats": ["Entrées", "Plats", "Desserts"],
     "ings": [dict({"id": i, "nom": n, "unite": u, "g": g, "prix": b, "rend": r, "tva": 20 if o.get("hr") else 5.5}, **o)
              for i, n, u, g, a, b, r, f, o in ING],
