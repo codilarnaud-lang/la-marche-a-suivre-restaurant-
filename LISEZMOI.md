@@ -8,9 +8,14 @@ Audit et suivi mensuel du ratio matière des restaurants, sur la partie alimenta
 - **Préparations de base** : sous-recettes réutilisables (sauce, fond, pâte, vinaigrette), avec leur poids obtenu. On les ajoute dans les fiches comme un ingrédient ; pour les écarts d'achats, elles sont remplacées par leurs ingrédients.
 - **Formules et menus** : un prix fixe et des créneaux (entrée, plat, dessert). Chaque créneau propose une catégorie entière ou seulement les produits cochés. Le coût d'une formule est la moyenne des produits proposés, pondérée par leurs ventes à la carte.
 - **TVA par produit** : vide, le produit prend la TVA générale du client.
+- **Carte du restaurant** : Fiches techniques → « Carte du restaurant » présente la carte comme un menu (catégories, prix TTC, composition des formules), avec en option les coûts et marges pour l'usage interne, et l'export en PDF.
 - **Couverts** : saisis par mois dans le Tableau de bord ou avec le relevé de ventes, ils donnent le ticket moyen et le coût matière par couvert.
 
 Les ventes passées gardent les prix et les recettes en vigueur au moment de la vente : modifier une fiche, une préparation ou une formule ne réécrit pas les mois passés.
+
+## Documents
+
+Onglet Documents, carte « Documents enregistrés » : filtre par type et par mois, et « Voir » affiche le détail d'un document (ingrédients, quantités, prix unitaires et montants d'une facture ; produits, quantités, prix du moment et CA d'un relevé de ventes). Le fichier d'origine (PDF, photo) n'est pas conservé : garde tes factures de ton côté.
 
 ## Contrôles
 

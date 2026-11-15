@@ -217,3 +217,29 @@ test('en ligne : l\'ancien format en un seul document est repris', async () => {
   assert.strictEqual(A.val('D().nom'), 'Brasserie (ancien format)');
   assert.strictEqual(JSON.parse(base.docs.get(INDEX)).fmt, 2, 'converti au nouveau format');
 });
+
+test('documents : détail des lignes et filtres', () => {
+  const { run, val } = charger();
+  run(`docOpen='fBX-2026-0101';view='documents';render0()`);
+  const h = val(`document.querySelector('#main').innerHTML`);
+  assert.match(h, /Bavette d'aloyau/);
+  assert.match(h, /2\s270,25\s€/, 'montant de la ligne bavette');
+  assert.match(h, /22,50\s€/, 'prix unitaire 2 270,25 ÷ 100,9 kg');
+  run(`docOpen='v2026-09';docF={type:'vente',m:'2026-09'};render0()`);
+  const v = val(`document.querySelector('#main').innerHTML`);
+  assert.match(v, /1 sur 24/);
+  assert.match(v, /2\s380 couverts/);
+  const ca = val(`calc(D(),'2026-09').ca`);
+  assert.ok(v.includes(val(`eur(${ca},2)`)), 'le total du relevé redonne le CA du mois');
+});
+
+test('carte du restaurant : catégories, prix et formules', () => {
+  const { run, val } = charger();
+  run(`view='fiches';ficheMode='menu';render0()`);
+  const h = val(`document.querySelector('#main').innerHTML`);
+  for (const k of ['Entrées', 'Plats', 'Desserts', 'Formules et menus', 'Bavette sauce échalote, frites', '19,80 €']) assert.ok(h.includes(k), k);
+  assert.match(h, /entrée au choix \+ plat au choix/);
+  assert.ok(!/ratio/.test(h.split('class="card menu"')[1]), 'pas de coûts sans la case cochée');
+  run(`menuCost=true;render0()`);
+  assert.match(val(`document.querySelector('#main').innerHTML`), /coût [\d,]+\s€ · ratio/);
+});
