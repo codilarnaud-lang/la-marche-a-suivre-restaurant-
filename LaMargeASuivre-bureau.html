@@ -71,6 +71,15 @@ svg text{fill:var(--mut);font:11px var(--fb)}
 .draft select,.draft input{max-width:230px}
 .mode{max-width:100%;overflow-x:auto;scrollbar-width:thin}.mode button{white-space:nowrap;flex:none}
 .split{display:grid;gap:16px;grid-template-columns:minmax(240px,1fr) minmax(300px,2.4fr)}
+.det{white-space:normal;background:var(--bg);padding:10px 12px}.det table{background:var(--panel)}
+/* Carte du restaurant : présentation façon menu, prix alignés à droite par une ligne de points */
+.menu{max-width:720px;margin:0 auto;padding:28px clamp(16px,5vw,48px)}
+.menu h2{font-size:26px;text-align:center}.menu .sub{text-align:center;color:var(--mut);margin:4px 0 20px}
+.menu h3{font:700 13px var(--fd);text-transform:uppercase;letter-spacing:.14em;color:var(--acc);border-bottom:1px solid var(--line);padding-bottom:6px;margin:22px 0 10px}
+.menu .it{display:flex;gap:8px;align-items:baseline;padding:5px 0}.menu .it b{font-weight:600}
+.menu .dots{flex:1;border-bottom:1px dotted var(--mut);transform:translateY(-4px);min-width:20px}
+.menu .px{font-variant-numeric:tabular-nums;font-weight:600;white-space:nowrap}
+.menu .info{font-size:12px;color:var(--mut);margin:-2px 0 4px}
 #newcl .sm{display:none}
 /* Téléphone : en-tête compact sur une ligne, indicateurs sur deux colonnes, fiche sous la liste des produits */
 @media (max-width:640px){
@@ -811,7 +820,8 @@ function vDocuments(){
   const opts=d.ings.map(i=>`<option value="${i.id}">${esc(i.nom)} (${esc(i.unite)})</option>`).join('');
   const popts=d.recs.map(r=>`<option>${esc(r.nom)}</option>`).join('');
   const today=new Date().toISOString().slice(0,10);
-  const docs=[...d.docs].sort((a,b)=>b.date.localeCompare(a.date));
+  const tous=[...d.docs].sort((a,b)=>b.date.localeCompare(a.date)),moisD=[...new Set(tous.map(x=>x.date.slice(0,7)))];
+  const docs=tous.filter(x=>(docF.type==='all'||x.type===docF.type)&&(docF.m==='all'||x.date.slice(0,7)===docF.m));
   return `${banner?`<div class="banner" role="status">${banner}</div>`:''}
   <h2>Documents</h2>${autoCard()}${qualiteCard(D())}${controleCard(D())}
   <div class="grid2">
@@ -832,9 +842,10 @@ function vDocuments(){
     <div><label class="small mut" for="cf">Facture : ingrédient ; quantité ; montant HT</label><textarea id="cf" rows="4" placeholder="Beurre doux;4;38,40"></textarea><div class="row" style="margin-top:6px"><input type="date" id="cfd" value="${today}"><input id="cff" placeholder="Fournisseur"><button id="cfb">Importer la facture</button></div></div>
     <div><label class="small mut" for="cv">Ventes : produit ; quantité</label><textarea id="cv" rows="4" placeholder="Bavette sauce échalote;180"></textarea><div class="row" style="margin-top:6px"><input type="date" id="cvd" value="${today}"><button id="cvb">Importer les ventes</button></div></div>
    </div><p class="ex" id="cerr"></p></div>
-  <div class="card"><div class="sec"><h3>Documents enregistrés</h3><span class="small mut">${docs.length}</span></div>
+  <div class="card"><div class="sec"><h3>Documents enregistrés</h3><span class="small mut">${docs.length} sur ${tous.length}</span></div>
+   <div class="row" style="margin-bottom:8px"><label class="small mut" for="dft">Type</label><select id="dft"><option value="all">Tous</option><option value="achat" ${docF.type==='achat'?'selected':''}>Factures</option><option value="vente" ${docF.type==='vente'?'selected':''}>Relevés de ventes</option></select><label class="small mut" for="dfm">Mois</label><select id="dfm"><option value="all">Tous</option>${moisD.map(m=>`<option value="${m}" ${docF.m===m?'selected':''}>${mlab(m)}</option>`).join('')}</select><span class="small mut">« Voir » affiche le détail des lignes.</span></div>
    <div class="tw"><table><thead><tr><th>Date</th><th>Type</th><th>Référence</th><th>Fournisseur</th><th class="n">Lignes</th><th class="n">Total</th><th></th></tr></thead><tbody>
-   ${docs.map(x=>`<tr><td>${esc(x.date)}</td><td>${x.type==='vente'?pill('nt','Ventes'):pill('ok','Facture')}</td><td>${esc(x.ref)}</td><td>${esc(x.fourn)}</td><td class="n">${x.l.length}</td><td class="n">${x.type==='vente'?fmt(x.l.reduce((s,l)=>s+(+l.q||0),0),0)+' produits':eur(x.l.reduce((s,l)=>s+(+l.ht||0),0),2)}</td><td><button class="x" data-del="${x.id}">Supprimer</button></td></tr>`).join('')}
+   ${docs.map(x=>`<tr><td>${esc(x.date)}</td><td>${x.type==='vente'?pill('nt','Ventes'):pill('ok','Facture')}</td><td>${esc(x.ref)}</td><td>${esc(x.fourn)}</td><td class="n">${x.l.length}</td><td class="n">${x.type==='vente'?fmt(x.l.reduce((s,l)=>s+(+l.q||0),0),0)+' produits':eur(x.l.reduce((s,l)=>s+(+l.ht||0),0),2)}</td><td><button class="g" data-dview="${x.id}">${docOpen===x.id?'Masquer':'Voir'}</button> <button class="x" data-del="${x.id}">Supprimer</button></td></tr>${docOpen===x.id?`<tr><td colspan="7" class="det">${docDetail(d,x)}</td></tr>`:''}`).join('')||'<tr><td colspan="7" class="mut">Aucun document pour ce filtre.</td></tr>'}
    </tbody></table></div></div>
   <template id="tf"><tr><td><select class="fi">${opts}</select></td><td class="n"><input class="n fq" type="number" step="any" min="0"></td><td class="n"><input class="n fh" type="number" step="any" min="0"></td><td><button class="x rm">Retirer</button></td></tr></template>
   <template id="tv"><tr><td><select class="vp">${popts}</select></td><td class="n"><input class="n vq" type="number" step="1" min="0"></td><td><button class="x rm">Retirer</button></td></tr></template>`
@@ -847,11 +858,50 @@ function lineOpts(d,sel,except){return `<optgroup label="Ingrédients">${d.ings.
 function catTable(r,c){const rows=Object.values(r.cats).filter(o=>o.ca>0||o.q>0).sort((a,b)=>b.ca-a.ca);if(!rows.length)return '<p class="mut">Pas encore de ventes sur cette période.</p>';
   return `<div class="tw"><table><thead><tr><th>Catégorie</th><th class="n">Produits vendus</th><th class="n">CA HT</th><th class="n">Part du CA</th><th class="n">Ratio théorique</th><th class="n">Ratio réel estimé</th><th>Cible ${pc(c.val)}</th></tr></thead><tbody>${rows.map(o=>`<tr><td>${esc(o.cat)}</td><td class="n">${fmt(o.q,0)}</td><td class="n">${eur(o.ca)}</td><td class="n">${pc(o.part)}</td><td class="n">${pc(o.ratio)}</td><td class="n"><b class="${o.ratioR>c.val?'bad':'good'}">${pc(o.ratioR)}</b></td><td>${o.ratioR>c.val?pill('bd','Au-dessus'):pill('ok','Dans la cible')}</td></tr>`).join('')}</tbody></table></div>
   <p class="small mut">Les produits vendus dans une formule comptent dans leur catégorie, avec la part du prix de la formule qui leur revient (au prorata de leur prix à la carte).</p>`}
+let docOpen=null,docF={type:'all',m:'all'},menuCost=false;
+/* Détail d'un document enregistré : lignes de la facture ou du relevé de ventes */
+function docDetail(d,x){
+  if(x.type==='vente'){let tq=0,tca=0;const m=x.date.slice(0,7),cv=d.couv&&d.couv[m];
+    const rows=x.l.map(l=>{const r=d.recs.find(z=>z.nom===l.p),q=+l.q||0,pu=puOf(d,l),ht=r?q*pu/(1+tvaOf(d,r)/100):0;tq+=q;tca+=ht;
+      return `<tr><td>${esc(l.p)}${r?'':' '+pill('bd','absent de la carte')}</td><td>${r?esc(r.cat||''):'–'}</td><td class="n">${fmt(q,0)}</td><td class="n">${r?fmt(pu)+' €':'–'}${l.pu>0&&r&&l.pu!==r.ttc?' <span class="small mut">(prix du moment)</span>':''}</td><td class="n">${r?eur(ht,2):'–'}</td></tr>`}).join('');
+    return `<div class="tw"><table><thead><tr><th>Produit</th><th>Catégorie</th><th class="n">Quantité</th><th class="n">Prix TTC</th><th class="n">CA HT</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><th>Total</th><th></th><th class="n">${fmt(tq,0)}</th><th></th><th class="n">${eur(tca,2)}</th></tr></tfoot></table></div><p class="small mut" style="margin:6px 0 0">${cv?fmt(+cv,0)+' couverts en '+mlab(m)+'. ':''}Le prix TTC est celui en vigueur au moment de la vente.</p>`}
+  let tht=0;const rows=x.l.map(l=>{const i=d.ings.find(z=>z.id===l.i),q=+l.q||0,ht=+l.ht||0;tht+=ht;
+    return `<tr><td>${i?esc(i.nom):'<span class="mut">ingrédient supprimé</span>'}${i&&i.hr?' '+pill('nt','hors ratio'):''}</td><td class="n">${fmt(q,q%1?2:0)} <span class="small mut">${i?esc(i.unite):''}</span></td><td class="n">${q?fmt(ht/q)+' €':'–'}</td><td class="n">${eur(ht,2)}</td></tr>`}).join('');
+  return `<div class="tw"><table><thead><tr><th>Ingrédient</th><th class="n">Quantité facturée</th><th class="n">Prix HT unitaire</th><th class="n">Montant HT</th></tr></thead><tbody>${rows}</tbody><tfoot><tr><th>Total HT</th><th></th><th></th><th class="n">${eur(tht,2)}</th></tr></tfoot></table></div>`}
+/* Carte du restaurant présentée comme un menu (prix TTC), avec en option les coûts pour l'usage interne */
+function slotLabel(d,sl){return sl.choix&&sl.choix.length?sl.choix.join(' ou '):(sl.cat||'').replace(/s$/,'').toLowerCase()+' au choix'}
+function vMenu(d,r,c){
+  const cats=catList(d),items=k=>d.recs.filter(x=>!isFormule(x)&&(x.cat||'Sans catégorie')===k);
+  const ligne=x=>{const p=r.pizzas[x.nom],nf=p&&!p.formule&&!p.raw.length;return `<div class="it"><b>${esc(x.nom)}</b><span class="dots"></span><span class="px">${x.ttc>0?fmt(x.ttc)+' €':'<span class="bad">prix à renseigner</span>'}</span></div>${menuCost&&p?`<div class="info">${nf?'sans fiche technique':'coût '+eur(p.costR,2)+' · ratio '+pc(p.ratioR)+' · marge '+eur(p.ht-p.costR,2)+' HT'}</div>`:''}`};
+  const groupes=[...cats,'Sans catégorie'].filter(k=>items(k).length).map(k=>`<h3>${esc(k)}</h3>${items(k).map(ligne).join('')}`).join('');
+  const fs=d.recs.filter(isFormule);
+  const forms=fs.length?`<h3>Formules et menus</h3>${fs.map(f=>`${ligne(f)}<div class="info">${(f.slots||[]).map(sl=>esc(slotLabel(d,sl))).join(' + ')||'composition à définir'}</div>`).join('')}`:'';
+  return `<div class="row" style="justify-content:space-between;margin-bottom:12px"><label><input type="checkbox" id="mcost" ${menuCost?'checked':''}> Afficher coûts, ratios et marges (usage interne)</label><button id="menupdf">Télécharger la carte en PDF</button></div>
+  <div class="card menu"><h2>${esc(d.nom)}</h2><p class="sub">La carte · prix en euros TTC</p>${groupes||'<p class="mut">Aucun produit à la carte.</p>'}${forms}</div>
+  <p class="small mut" style="text-align:center">Vue à partir des fiches techniques : pour changer un nom, un prix ou une catégorie, passe par « Carte ». Le PDF reprend les prix sans les coûts.</p>`}
+async function makeMenuPdf(){
+  const J=window.jspdf;if(!J)return 'Bibliothèque PDF indisponible';
+  const d=D(),T=s=>String(s).replace(/[  ]/g,' ');
+  const doc=new J.jsPDF({unit:'mm',format:'a4'});let y=24;const L=25,W=160;
+  const chk=n=>{if(y+n>280){doc.addPage();y=22}};
+  doc.setFont('helvetica','bold').setFontSize(20).setTextColor(11,61,50);doc.text(T(d.nom),105,y,{align:'center'});y+=7;
+  doc.setFont('helvetica','normal').setFontSize(10).setTextColor(110);doc.text('La carte · prix en euros TTC',105,y,{align:'center'});y+=10;
+  const head=t=>{chk(16);y+=4;doc.setFont('helvetica','bold').setFontSize(11).setTextColor(15,107,84);doc.text(T(t.toUpperCase()),L,y);y+=2;doc.setDrawColor(200).line(L,y,L+W,y);y+=7};
+  const item=(nom,prix,info)=>{chk(info?11:7);doc.setFont('helvetica','normal').setFontSize(11).setTextColor(30);const n=doc.splitTextToSize(T(nom),W-30);doc.text(n,L,y);
+    const px=prix>0?fmt(prix)+' €':'';doc.setFont('helvetica','bold');doc.text(T(px),L+W,y,{align:'right'});
+    const wn=Math.min(doc.getTextWidth(T(n[n.length-1])),W-30);doc.setDrawColor(190);doc.setLineDashPattern([0.4,1.2],0);doc.line(L+wn+2,y,L+W-doc.getTextWidth(T(px))-2,y);doc.setLineDashPattern([],0);y+=5*n.length+1;
+    if(info){doc.setFont('helvetica','italic').setFontSize(9).setTextColor(110);doc.splitTextToSize(T(info),W-30).forEach(l=>{doc.text(l,L,y);y+=4.5});y+=1}};
+  catList(d).concat('Sans catégorie').forEach(k=>{const it=d.recs.filter(x=>!isFormule(x)&&(x.cat||'Sans catégorie')===k);if(!it.length)return;head(k);it.forEach(x=>item(x.nom,x.ttc))});
+  const fs=d.recs.filter(isFormule);if(fs.length){head('Formules et menus');fs.forEach(f=>item(f.nom,f.ttc,(f.slots||[]).map(sl=>slotLabel(d,sl)).join(' + ')))}
+  const dl=await cap('downloads');const name='carte-'+norm(d.nom).replace(/ /g,'-')+'.pdf';
+  if(!dl){doc.save(name);return 'PDF téléchargé'}
+  try{await dl.save({filename:name,data:doc.output('blob')});return 'PDF enregistré'}catch(e){return e&&e.code==='declined'?'Téléchargement refusé':'PDF non enregistré'}}
 function vFiches(){
   const d=D(),r=calc(d,period),c=cible(d),cats=catList(d);
   const head=`${banner?`<div class="banner" role="status">${banner}</div>`:''}<div class="row" style="justify-content:space-between"><h2>Fiches techniques</h2>${perSel()}</div>`;
-  const modeSel=`<div class="mode" role="group" aria-label="Type de fiche" style="margin-bottom:10px"><button data-fmode="carte" class="${ficheMode==='carte'?'on':''}">Carte</button><button data-fmode="preps" class="${ficheMode==='preps'?'on':''}">Préparations de base</button></div>`;
+  const modeSel=`<div class="mode" role="group" aria-label="Type de fiche" style="margin-bottom:10px"><button data-fmode="carte" class="${ficheMode==='carte'?'on':''}">Carte</button><button data-fmode="preps" class="${ficheMode==='preps'?'on':''}">Préparations de base</button><button data-fmode="menu" class="${ficheMode==='menu'?'on':''}">Carte du restaurant</button></div>`;
   const dl=`<datalist id="catlist">${cats.map(x=>`<option value="${esc(x)}">`).join('')}</datalist>`;
+  if(ficheMode==='menu')return `${head}${modeSel}${vMenu(d,r,c)}`;
   if(ficheMode==='preps'){
     const P=d.preps||[];if(!prepSel||!P.some(p=>p.id===prepSel))prepSel=P[0]&&P[0].id;
     const list=P.map(p=>{const x=r.preps[p.id];return `<button data-prsel="${esc(p.id)}" class="${p.id===prepSel?'on':''}"><span>${esc(p.nom)}</span><span class="mut">${x?fmt(x.cg*1000)+' €/kg':''}</span></button>`}).join('')||'<p class="small mut">Aucune préparation. Une préparation de base (sauce, fond, pâte, vinaigrette) se fait une fois et sert dans plusieurs plats.</p>';
@@ -1519,6 +1569,8 @@ document.addEventListener('click',e=>{
   if(t.dataset.idel){const used=d.recs.some(r=>(r.l||[]).some(l=>l.i===t.dataset.idel))||(d.preps||[]).some(p=>p.l.some(l=>l.i===t.dataset.idel))||d.docs.some(x=>x.l.some(l=>l.i===t.dataset.idel))||Object.values(d.inv||{}).some(v=>v[t.dataset.idel]);if(used){$('#ierr').textContent='Cet ingrédient est utilisé dans une recette, une préparation, une facture ou un inventaire. Retire-le d\'abord de ces endroits.';return}return change(()=>{d.ings=d.ings.filter(i=>i.id!==t.dataset.idel);if(d.alias&&d.alias.ing)Object.keys(d.alias.ing).forEach(k=>{if(d.alias.ing[k]===t.dataset.idel)delete d.alias.ing[k]})})}
   if(t.id==='apply')return change(()=>{d.recs.forEach(r=>{if(d.sim[r.nom]!=null){logPrix(d,r.nom,r.ttc,+d.sim[r.nom]);r.ttc=+d.sim[r.nom]}});d.sim={}},()=>'Nouveaux prix appliqués à la carte. Tous les ratios sont recalculés.');
   if(t.id==='reset')return change(()=>d.sim={});
+  if(t.dataset.dview){docOpen=docOpen===t.dataset.dview?null:t.dataset.dview;return render()}
+  if(t.id==='menupdf'){t.textContent='Création du PDF…';makeMenuPdf().then(m=>{t.textContent=m}).catch(()=>{t.textContent='PDF impossible ici'});return}
   if(t.id==='pdf'){t.textContent='Création du PDF…';makePdf().then(m=>{t.textContent=m}).catch(()=>{t.textContent='PDF impossible ici'});return}
   if(t.id==='cp'||t.id==='cpx'){const txt=t.id==='cp'?$('#bil').textContent:$('#exp').value;const ta=t.id==='cpx'?$('#exp'):null;
     (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(()=>{t.textContent='Copié'}).catch(()=>{if(ta){ta.select();t.textContent='Sélectionné, copie avec Ctrl+C'}else t.textContent='Copie refusée, sélectionne le texte'});return}
@@ -1577,6 +1629,9 @@ document.addEventListener('change',e=>{
   if(t.dataset.stock){const k=t.dataset.stock,v=t.value.trim(),n=parseNum(v);if(v!==''&&!(n>=0))return render();
     return change(()=>{d.stocks=d.stocks||{};if(v==='')delete d.stocks[k];else d.stocks[k]=n},(b,a)=>{const x=b.m.find(r=>r[0]===k),y=a.m.find(r=>r[0]===k);return 'Stock enregistré.'+(x&&y&&y[1]!=null?` Ratio réel de ${mlab(k)} : ${pc(x[1])} → <b>${pc(y[1])}</b>.`:'')})}
   if(t.id==='pf'){pzF=t.value;return render()}
+  if(t.id==='dft'){docF.type=t.value;docOpen=null;return render()}
+  if(t.id==='dfm'){docF.m=t.value;docOpen=null;return render()}
+  if(t.id==='mcost'){menuCost=t.checked;return render()}
   if(t.id==='po'){onlyP=t.checked;return render()}
   if(t.dataset.pp!=null){return change(()=>{const l=d.recs.find(r=>r.nom===t.dataset.pp).l[+t.dataset.pl];const v=parseNum(t.value);if(v>0)l.pes=v;else delete l.pes})}
   if(t.id==='ob'){const v=t.value.trim();return change(()=>d.objectif=v===''?null:parseNum(v))}
