@@ -67,6 +67,7 @@ svg text{fill:var(--mut);font:11px var(--fb)}
 .ex{font-size:12px;color:var(--warn)}
 .drop{position:relative;display:grid;gap:4px;justify-items:center;padding:22px 16px;border:2px dashed var(--line);border-radius:8px;cursor:pointer;text-align:center}
 .drop.over,.drop:hover{border-color:var(--acc);background:var(--acc2)}
+button.drop{width:100%;background:transparent;color:var(--fg);font-weight:400}
 .draft{border-top:1px solid var(--line);padding-top:12px;margin-top:12px;display:grid;gap:8px}
 .draft select,.draft input{max-width:230px}
 .mode{max-width:100%;overflow-x:auto;scrollbar-width:thin}.mode button{white-space:nowrap;flex:none}
@@ -105,6 +106,10 @@ svg text{fill:var(--mut);font:11px var(--fb)}
  <nav class="tabs" id="tabs"></nav>
 </header>
 <main id="main"></main>
+<!-- Champs de fichier hors de la zone redessinée : si l'écran se redessine pendant que la fenêtre de choix est ouverte,
+     le fichier choisi arrive quand même (un champ recréé entre-temps le perdait). -->
+<input type="file" id="docf" multiple accept=".pdf,.jpg,.jpeg,.png,.webp,.csv,.txt,.xlsx,.xls,application/pdf,image/*,text/csv,text/plain" hidden>
+<input type="file" id="impf" accept=".json,application/json" hidden>
 </div>
 <script>/* jsPDF 2.5.1, licence MIT */
 /** @license
@@ -1083,7 +1088,7 @@ function vDonnees(){
    <div class="row"><label for="s_vol">Volume minimum pour conclure (g)</label><input class="n" id="s_vol" type="number" value="${d.volmin}"></div></div></div>
   <div class="card"><div class="sec"><h3>Mon activité</h3></div><p class="small mut">Affiché en en-tête du bilan PDF.</p><div class="list"><div><label class="small mut" for="pro_nom">Nom de l'activité</label><br><input class="w" id="pro_nom" value="${esc((S.pro||{}).nom||'')}"></div><div><label class="small mut" for="pro_ct">Coordonnées (téléphone, e-mail)</label><br><input class="w" id="pro_ct" value="${esc((S.pro||{}).ct||'')}"></div></div></div>
   <div class="card"><div class="sec"><h3>Sauvegarde</h3></div><p class="small mut">Les données sont gardées dans ce navigateur${inClaude()?'':' (sur cet ordinateur uniquement : si tu effaces les données du navigateur, elles disparaissent)'}${dbBase?' et dans ton espace privé de la page, visible de toi seul':''}. Enregistre régulièrement une sauvegarde dans un fichier et garde-la ailleurs (clé USB, Drive, e-mail).</p>${syncErr?`<div class="note" style="margin-bottom:8px"><b>Sauvegarde en ligne impossible</b> (${esc(syncErr)}). Tes données restent dans ce navigateur mais ne sont plus copiées en ligne. Si l'erreur parle de quota, l'espace en ligne est plein : supprime un client que tu ne suis plus. Enregistre en attendant la sauvegarde dans un fichier.</div>`:''}
-   <div class="row"><button id="savef">Enregistrer la sauvegarde dans un fichier</button><button class="g" id="openf">Ouvrir un fichier de sauvegarde</button><input type="file" id="impf" accept=".json,application/json" hidden></div>
+   <div class="row"><button id="savef">Enregistrer la sauvegarde dans un fichier</button><button class="g" id="openf">Ouvrir un fichier de sauvegarde</button></div>
    <p class="small mut" style="margin:6px 0 12px"><span id="bkinfo">${S.lastBackup?'Dernier fichier de sauvegarde : '+new Date(S.lastBackup).toLocaleString('fr-FR')+'.':'Aucun fichier de sauvegarde enregistré pour l\'instant.'}</span> Le fichier contient tous les clients et sert aussi à passer de la version PC à la version Claude.</p>
    <details><summary class="small mut" style="cursor:pointer">Sauvegarde par copier-coller</summary>
    <textarea id="exp" rows="3" readonly style="margin-top:8px">${esc(JSON.stringify(S))}</textarea><div class="row" style="margin-top:6px"><button class="g" id="cpx">Copier la sauvegarde</button></div>
@@ -1204,8 +1209,7 @@ function autoCard(){
   if(!inClaude())return `<div class="card"><div class="sec"><h3>Lecture automatique des documents</h3><span class="small mut">disponible dans la version Claude</span></div>
   <p class="small mut" style="margin:0">Cette version fonctionne sur ton ordinateur, sans internet et sans Claude. Saisis les factures et les ventes avec les formulaires ci-dessous ou par copier-coller. Pour faire lire une facture PDF ou une photo, ouvre La marge à suivre dans Claude : tu passes tes données d'une version à l'autre avec la sauvegarde (onglet Ingrédients et données).</p></div>`;
   return `<div class="card"><div class="sec"><h3>Lire un document automatiquement</h3><span class="small mut">facture PDF, photo, rapport de caisse, CSV</span></div>
-  <div class="drop" id="dz"><b>Dépose un ou plusieurs documents ici</b><span class="small mut">ou clique pour les choisir (PDF, JPG, PNG, CSV, TXT)</span><span class="pill nt">Choisir un fichier</span>
-  <input type="file" id="docf" multiple aria-label="Choisir un document" style="position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;padding:0;border:0"></div>
+  <button type="button" class="drop" id="dz"><b>Dépose un ou plusieurs documents ici</b><span class="small mut">ou clique pour les choisir (PDF, photo, CSV, Excel, texte)</span><span class="pill nt">Choisir des fichiers</span></button>
   <div class="note" style="margin-top:10px"><b>Le bouton ne s'ouvre pas ?</b> Trois autres moyens : fais glisser le fichier dans le cadre, copie une capture ou une image puis colle-la ici avec Ctrl+V (Cmd+V sur Mac), ou colle le texte de la facture ci-dessous.</div>
   <textarea id="pastet" rows="4" placeholder="Colle ici le texte copié d'une facture ou d'un rapport de caisse" style="margin-top:10px"></textarea>
   <div class="row" style="margin-top:6px"><button id="pastebtn">Lire ce texte</button></div>
@@ -1576,6 +1580,7 @@ document.addEventListener('click',e=>{
     (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(()=>{t.textContent='Copié'}).catch(()=>{if(ta){ta.select();t.textContent='Sélectionné, copie avec Ctrl+C'}else t.textContent='Copie refusée, sélectionne le texte'});return}
   if(t.id==='savef'){saveBackupFile(t);return}
   if(t.id==='openf'){const f=$('#impf');if(f)f.click();return}
+  if(t.id==='dz'){const f=$('#docf');if(f)f.click();return}
   if(t.id==='impb'){let o;try{o=JSON.parse($('#imp').value);if(o&&(o.app==='LaMargeASuivre'||o.app==='RatioPizza')&&o.data)o=o.data;if(!o||!o.clients||!o.cur||!o.clients[o.cur]||Object.values(o.clients).some(c=>!c||!Array.isArray(c.docs)||!Array.isArray(c.recs)||!Array.isArray(c.ings)))throw 0}catch(x){$('#serr').textContent='Sauvegarde illisible. Ouvre un fichier enregistré par La marge à suivre (ou RatioPizza), ou colle le texte complet copié depuis ce logiciel.';return}
     const nIn=Object.keys(o.clients).length,nCur=Object.keys(S.clients).length;
     if(t.dataset.arm!=='1'){t.dataset.arm='1';t.textContent='Confirmer : remplacer';$('#serr').textContent=`Attention : la restauration remplace tes ${nCur} client(s) actuel(s) par les ${nIn} client(s) de la sauvegarde (${Object.values(o.clients).map(c=>c.nom).join(', ')}). Clique sur « Confirmer : remplacer ». La version actuelle restera récupérable.`;return}

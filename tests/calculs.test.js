@@ -243,3 +243,12 @@ test('carte du restaurant : catégories, prix et formules', () => {
   run(`menuCost=true;render0()`);
   assert.match(val(`document.querySelector('#main').innerHTML`), /coût [\d,]+\s€ · ratio/);
 });
+
+test('champs de fichier hors de la zone redessinée', () => {
+  const html = require('fs').readFileSync(require('path').join(__dirname, '..', 'LaMargeASuivre.html'), 'utf8');
+  const [page, script] = html.split('<script>\n');
+  for (const id of ['docf', 'impf']) {
+    assert.ok(new RegExp(`<input type="file" id="${id}"`).test(page), id + ' dans la page fixe');
+    assert.ok(!script.includes(`id="${id}"`), id + ' jamais recréé par le rendu');
+  }
+});
