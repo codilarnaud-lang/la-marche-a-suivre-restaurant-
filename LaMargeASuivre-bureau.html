@@ -523,7 +523,7 @@ const cap=async n=>{if(!(await claudeReady))return null;return window.claude.use
 claudeReady.then(ok=>{if(ok&&typeof S!=='undefined'&&S&&typeof render==='function')try{render()}catch(e){}});
 
 /* ---------- état et sauvegarde ---------- */
-let S=null, view='tableau', period='all', rec=null, banner=null, saveT=null, dbDoc=null, syncErr=null;
+let S=null, view='tableau', period='all', rec=null, banner=null, saveT=null, dbBase=null, dbIndex=null, dbSent={}, syncing=null, syncAgain=false, syncErr=null;
 function blank(nom){return {nom,tva:10,seuil:10,volmin:20000,perte:4,cible:null,cad:{perso:0,loyer:0,energie:0,autres:0,emprunt:0,verse:0},var:{plat:0,com:0,cb:0},bois:{ca:0,ratio:25},cats:['Entrées','Plats','Desserts'],ings:[],recs:[],preps:[],docs:[],couv:{},sim:{}}}
 /* Les sauvegardes de RatioPizza (version 1) restent lisibles : leurs produits sans catégorie sont rangés dans « Pizzas ».
    La marge à suivre a ses propres clés de stockage (lmas.v1, lmas.prev, lamargeasuivre) : elle ne partage jamais ses données avec RatioPizza. */
@@ -539,7 +539,7 @@ function D(){return S.clients[S.cur]}
 function save(){
   S.t=Date.now();
   try{localStorage.setItem('lmas.v1',JSON.stringify(S))}catch(e){}
-  clearTimeout(saveT);saveT=setTimeout(async()=>{if(!dbDoc)return;const was=syncErr;try{await dbDoc.set({json:JSON.stringify(S),t:S.t});syncErr=null}catch(e){syncErr=(e&&e.code)||'erreur'}if(was!==syncErr&&view==='donnees')render()},900);
+  clearTimeout(saveT);saveT=setTimeout(()=>{syncNow()},900);
 }
 /* Sauvegarde dans un fichier JSON daté : capacité « downloads » dans Claude, lien de téléchargement ailleurs */
 async function saveBackupFile(btn){
@@ -556,15 +556,44 @@ async function saveBackupFile(btn){
 /* Garde la version remplacée (restauration, synchronisation) pour pouvoir revenir en arrière */
 function keepPrev(json,why){try{localStorage.setItem('lmas.prev',JSON.stringify({t:Date.now(),why,json}))}catch(e){}}
 function getPrev(){try{const p=JSON.parse(localStorage.getItem('lmas.prev')||'null');return p&&p.json?p:null}catch(e){return null}}
+/* ---------- sauvegarde en ligne (Claude) ----------
+   Un document de la base Claude est limité à 256 Ko : les données sont découpées en un index (réglages communs et liste
+   des morceaux), un document par client (fiches, réglages, stocks) et un document par client et par mois (factures et
+   relevés de ventes). Seuls les morceaux modifiés sont réécrits ; l'index est écrit en dernier. */
+const MOIS_RE=/^lmas-d-(.+)-(\d{4}-\d{2})$/;
+function topJson(st){const o={};Object.keys(st).forEach(k=>{if(k!=='clients')o[k]=st[k]});return JSON.stringify(o)}
+function cloudParts(st){const parts={};Object.entries(st.clients||{}).forEach(([cid,c])=>{const m={};Object.keys(c).forEach(k=>{if(k!=='docs')m[k]=c[k]});parts['lmas-c-'+cid]=JSON.stringify(m);
+  const by={};(c.docs||[]).forEach(x=>{const mo=/^\d{4}-\d{2}/.test(x.date||'')?x.date.slice(0,7):'0000-00';(by[mo]=by[mo]||[]).push(x)});
+  Object.entries(by).forEach(([mo,ds])=>{parts['lmas-d-'+cid+'-'+mo]=JSON.stringify(ds)})});return parts}
+function assemble(idx,parts){const st=JSON.parse(idx.top||'{}');st.clients={};
+  Object.entries(parts).forEach(([k,v])=>{if(k.startsWith('lmas-c-')){const cid=k.slice(7);st.clients[cid]=Object.assign(JSON.parse(v),{docs:(st.clients[cid]||{}).docs||[]})}});
+  Object.entries(parts).forEach(([k,v])=>{const m=k.match(MOIS_RE);if(m&&st.clients[m[1]])st.clients[m[1]].docs.push(...JSON.parse(v))});
+  st.t=idx.t;return st}
+async function syncNow(){if(!dbBase)return;if(syncing){syncAgain=true;return syncing}
+  const was=syncErr;
+  syncing=(async()=>{try{do{syncAgain=false;const st=S,t=st.t||Date.now(),parts=cloudParts(st);
+      for(const [k,v] of Object.entries(parts)){if(dbSent[k]===v)continue;await dbBase.doc(k).set({json:v,t});dbSent[k]=v}
+      await dbIndex.set({fmt:2,t,top:topJson(st),parts:Object.keys(parts)});
+      for(const k of Object.keys(dbSent))if(!(k in parts)){try{await dbBase.doc(k).delete()}catch(e){}delete dbSent[k]}
+      syncErr=null}while(syncAgain)}
+    catch(e){syncErr=(e&&e.code)||'erreur'}
+    finally{syncing=null}
+    if(was!==syncErr&&view==='donnees')render()})();
+  return syncing}
 async function initDb(){
   try{
     const user=await cap('user'),db=await cap('db');
     if(!user||!db)return;const id=await user.id();if(!id)return;
-    dbDoc=db.doc('data/users/'+id+'/lamargeasuivre');
-    const snap=await dbDoc.get();
-    if(snap.exists){const d=snap.data();if(d&&d.json&&d.t>(S.t||0)){const loc=JSON.stringify(S);if(S.t)keepPrev(loc,'synchronisation');S=migrate(JSON.parse(d.json));render();}}
-    else await dbDoc.set({json:JSON.stringify(S),t:S.t||Date.now()});
-  }catch(e){}
+    const base=db.collection('data/users/'+id),idx=base.doc('lamargeasuivre');
+    const snap=await idx.get(),x=snap.exists?(snap.data()||{}):null;
+    if(x&&x.t>(S.t||0)){let st=null;
+      if(x.fmt===2){const parts={};for(const k of x.parts||[]){const p=await base.doc(k).get();if(!p.exists)throw new Error('morceau manquant : '+k);parts[k]=p.data().json}st=assemble(x,parts);dbSent=parts}
+      else if(x.json)st=JSON.parse(x.json);
+      if(st){const loc=JSON.stringify(S);if(S.t)keepPrev(loc,'synchronisation');S=migrate(st);try{localStorage.setItem('lmas.v1',JSON.stringify(S))}catch(e){}render()}}
+    dbBase=base;dbIndex=idx;
+    /* rien en ligne, ancien format, ou version locale plus récente : on envoie */
+    if(!x||x.fmt!==2||!(x.t>=(S.t||0)))await syncNow();
+  }catch(e){syncErr=(e&&e.code)||'erreur'}
 }
 
 /* ---------- calculs ---------- */
@@ -637,15 +666,15 @@ function calc(d,per){
   d.recs.filter(isFormule).forEach(r=>{const hz=1+tvaOf(d,r)/100,ht=r.ttc/hz,mix=mixOf(d,r,VP);const rl=[];let c=0;
     mix.forEach(sl=>sl.forEach(({n,w})=>{const z=pizzas[n];if(!z)return;c+=w*z.cost;z.raw.forEach(x=>rl.push({i:x.i,g:x.g*w}))}));
     pizzas[r.nom]={nom:r.nom,cat:r.cat||'Formules',formule:true,ttc:r.ttc,hf:hz,ht,cost:c,ratio:ht?c/ht*100:null,marge:ht-c,lines:[],raw:mergeRaw(rl),mix,slots:r.slots||[]}});
-  const V={},A={},CAp={},theo={},QP={},CAc={};let nVentesDocs=0,nAchats=0,ca=0,nPizzas=0,theoCost=0;
+  const V={},A={},CAp={},theo={},QP={},CAc={},sansF={};let nVentesDocs=0,nAchats=0,ca=0,nPizzas=0,theoCost=0;
   d.docs.forEach(x=>{const m=x.date.slice(0,7);if(!ms.includes(m))return;
     if(x.type==='vente'){nVentesDocs++;x.l.forEach(l=>{const q=+l.q||0;V[l.p]=(V[l.p]||0)+q;const z=pizzas[l.p];if(!z)return;
       const lca=q*puOf(d,l)/z.hf;CAp[l.p]=(CAp[l.p]||0)+lca;
       let rl=l.rl;
       if(z.formule){const mix=mixOf(d,d.recs.find(r=>r.nom===l.p),VM[m]||{});const tot=mix.reduce((s,sl)=>s+sl.reduce((u,{n,w})=>u+w*((pizzas[n]&&pizzas[n].ttc)||0),0),0);const parts=[];
-        mix.forEach(sl=>sl.forEach(({n,w})=>{const p=pizzas[n];if(!p)return;QP[n]=(QP[n]||0)+q*w;CAc[p.cat]=(CAc[p.cat]||0)+(tot>0?lca*w*p.ttc/tot:0);if(!rl)p.raw.forEach(y=>parts.push({i:y.i,g:y.g*w}))}));
+        mix.forEach(sl=>sl.forEach(({n,w})=>{const p=pizzas[n];if(!p)return;QP[n]=(QP[n]||0)+q*w;const part=tot>0?lca*w*p.ttc/tot:0;CAc[p.cat]=(CAc[p.cat]||0)+part;if(!p.raw.length)sansF[n]=(sansF[n]||0)+part;if(!rl)p.raw.forEach(y=>parts.push({i:y.i,g:y.g*w}))}));
         if(!rl)rl=mergeRaw(parts)}
-      else{QP[l.p]=(QP[l.p]||0)+q;CAc[z.cat]=(CAc[z.cat]||0)+lca;if(!rl)rl=z.raw}
+      else{QP[l.p]=(QP[l.p]||0)+q;CAc[z.cat]=(CAc[z.cat]||0)+lca;if(!rl)rl=z.raw;if(!rl.length)sansF[l.p]=(sansF[l.p]||0)+lca}
       rl.forEach(y=>{const i=ing[y.i];if(!i)return;theoCost+=q*y.g*costG(i);theo[y.i]=(theo[y.i]||0)+q*y.g/(i.rend||1)})})}
     else{nAchats++;x.l.forEach(l=>{const a=A[l.i]||(A[l.i]={q:0,ht:0});a.q+=+l.q||0;a.ht+=+l.ht||0})}});
   Object.entries(V).forEach(([p,q])=>{if(!pizzas[p])return;ca+=CAp[p]||0;nPizzas+=q});
@@ -677,7 +706,9 @@ function calc(d,per){
   /* couverts : connus seulement si chaque mois de la période en a */
   const cv=ms.map(m=>d.couv&&+d.couv[m]>0?+d.couv[m]:null),couv=ms.length&&cv.every(v=>v!=null)?cv.reduce((s,v)=>s+v,0):null;
   const cgOf=id=>ing[id]?costG(ing[id]):(preps[id]?preps[id].cg:0);
-  return {d,ing,preps,pizzas,V,A,QP,ca,nPizzas,theoCost,achatsHT,horsRatio,stk,conso,invDet,ecarts,em,ms,all,nVentesDocs,nAchats,cats,couv,cgOf,
+  /* CA vendu sans fiche technique : son coût compte pour 0, le ratio théorique est donc sous-estimé */
+  const caSansFiche=Object.values(sansF).reduce((s,v)=>s+v,0);
+  return {d,ing,preps,pizzas,V,A,QP,sansF,caSansFiche,partSansFiche:ca?caSansFiche/ca*100:0,ca,nPizzas,theoCost,achatsHT,horsRatio,stk,conso,invDet,ecarts,em,ms,all,nVentesDocs,nAchats,cats,couv,cgOf,
     lineCost:l=>rawCost(raw([l])),lineCostR:l=>rawR(raw([l])),
     ratioReel:ca?conso/ca*100:null,ratioTheo:ca?theoCost/ca*100:null}
 }
@@ -729,7 +760,8 @@ function vTableau(){
   let mz='';
   if(mozId){const lab=all.map(mlab),vals=rm.map(x=>base(x)?(x.A[mozId]?x.A[mozId].q*x.ing[mozId].g:0)/base(x):null),tg=rm.map(x=>{const e=x.ecarts.find(e=>e.i.id===mozId);return base(x)&&e?e.t/base(x):null}).filter(v=>v!=null);
     mz=`<div class="card"><div class="sec"><h3>${esc(r.ing[mozId].nom)} acheté par ${unite}</h3><span class="small mut">grammes · 1er poste d'achat</span></div>${bars(lab,vals,tg.length?tg.reduce((a,b)=>a+b,0)/tg.length:null,'g',{dec:0,tl:'théorie',al:'Grammes achetés par '+unite})}<p class="small mut">Le suivi le plus lisible pour le patron : si la barre redescend vers la ligne, la portion est mieux tenue.</p></div>`}
-  const alerts=[];if(c.irreal)alerts.push(['bd','Cible impossible','Les charges saisies dépassent le chiffre d\'affaires : la cible par défaut de 28 % est utilisée. Revois le Cadrage.']);qualite(d).slice(0,4).forEach(q=>alerts.push([q.lvl,'Qualité des données',q.txt]));
+  const alerts=[];if(r.partSansFiche>=1){const ls=Object.entries(r.sansF).sort((a,b)=>b[1]-a[1]).map(([n])=>n);alerts.push([r.partSansFiche>=5?'bd':'wn','Produits sans fiche technique',`${pc(r.partSansFiche)} du CA (${eur(r.caSansFiche)}) vient de produits sans recette : leur coût compte pour 0, le ratio théorique et le ratio par catégorie sont sous-estimés. À compléter dans Fiches techniques : ${ls.slice(0,5).join(', ')}${ls.length>5?'…':''}.`])}
+  if(c.irreal)alerts.push(['bd','Cible impossible','Les charges saisies dépassent le chiffre d\'affaires : la cible par défaut de 28 % est utilisée. Revois le Cadrage.']);qualite(d).slice(0,4).forEach(q=>alerts.push([q.lvl,'Qualité des données',q.txt]));
   ec.slice(0,4).forEach(e=>alerts.push(['bd','Surconsommation',`${e.i.nom} : ${pc(e.ec)} d'achats au-dessus de la théorie, soit environ ${eur(e.val)} sur la période.`]));
   Object.values(r.cats).filter(o=>o.ca>0&&o.ratioR>c.val).sort((a,b)=>b.ratioR-a.ratioR).slice(0,2).forEach(o=>alerts.push(['wn','Catégorie au-dessus de la cible',`${o.cat} : ratio réel estimé ${pc(o.ratioR)} pour une cible de ${pc(c.val)} (${pc(o.part)} du CA).`]));
   above.slice(0,3).forEach(z=>alerts.push(['wn','Produit au-dessus de la cible',`${z.nom} : ratio réel estimé ${pc(z.ratioR)} pour une cible de ${pc(c.val)}.`]));
@@ -744,7 +776,7 @@ function vTableau(){
    <div class="kpi"><div class="l">Achats HT</div><div class="v">${eur(r.achatsHT)}</div><div class="s">${r.nAchats} factures${r.horsRatio>0?' · '+eur(r.horsRatio)+' hors ratio exclus':''}</div></div>
    <div class="kpi"><div class="l">Ratio matière réel</div><div class="v ${gap>0?'bad':'good'}">${pc(r.ratioReel)}</div><div class="s">${r.stk!=null?'(achats '+(r.stk>=0?'+ ':'− ')+eur(Math.abs(r.stk),2)+' de stock) ÷ CA HT':'achats ÷ CA HT, stock non saisi'}</div></div>
    <div class="kpi"><div class="l">Cible (${c.src})</div><div class="v">${pc(c.val)}</div><div class="s">${gap==null?'':'écart '+(gap>0?'+':'')+fmt(gap,1)+' pt'}</div></div>
-   <div class="kpi"><div class="l">Ratio théorique</div><div class="v">${pc(r.ratioTheo)}</div><div class="s">recettes × ventes</div></div>
+   <div class="kpi"><div class="l">Ratio théorique</div><div class="v">${pc(r.ratioTheo)}</div><div class="s ${r.partSansFiche>=1?'bad':''}">${r.partSansFiche>=1?'sous-estimé : '+pc(r.partSansFiche)+' du CA sans fiche':'recettes × ventes'}</div></div>
   </div>
   <div class="grid2">
    <div class="card"><div class="sec"><h3>Ratio matière réel par mois</h3><span class="small mut">% du CA HT</span></div>${bars(all.map(mlab),rm.map(x=>x.ratioReel),objectif(d).v,'%',{al:'Ratio réel par mois',tl:objectif(d).src==='cible'?'cible':'objectif'})}
@@ -841,7 +873,7 @@ function vFiches(){
   if(!rec||!d.recs.find(x=>x.nom===rec))rec=d.recs[0]&&d.recs[0].nom;
   const z=r.pizzas[rec],R=d.recs.find(x=>x.nom===rec);
   const groups=[...cats.map(k=>[k,d.recs.filter(x=>!isFormule(x)&&x.cat===k)]),['Sans catégorie',d.recs.filter(x=>!isFormule(x)&&!x.cat)],['Formules et menus',d.recs.filter(isFormule)]].filter(g=>g[1].length);
-  const list=groups.map(([k,rs])=>`<div class="small mut" style="margin:8px 0 2px;text-transform:uppercase;letter-spacing:.05em">${esc(k)}</div>`+rs.map(x=>{const p=r.pizzas[x.nom];return `<button data-rec="${esc(x.nom)}" class="${x.nom===rec?'on':''}"><span>${esc(x.nom)}</span><span class="${p&&p.ratioR>c.val?'bad':'good'}">${p?pc(p.ratioR):''}</span></button>`}).join('')).join('');
+  const list=groups.map(([k,rs])=>`<div class="small mut" style="margin:8px 0 2px;text-transform:uppercase;letter-spacing:.05em">${esc(k)}</div>`+rs.map(x=>{const p=r.pizzas[x.nom],nf=p&&!p.formule&&!p.raw.length;return `<button data-rec="${esc(x.nom)}" class="${x.nom===rec?'on':''}"><span>${esc(x.nom)}</span>${nf?pill('bd','sans fiche'):`<span class="${p&&p.ratioR>c.val?'bad':'good'}">${p?pc(p.ratioR):''}</span>`}</button>`}).join('')).join('');
   const tvaIn=`<label class="small mut" for="rt">TVA (%)</label><input class="n" id="rt" type="number" step="0.5" min="0" max="30" value="${R&&R.tva!=null&&R.tva!==''?R.tva:''}" placeholder="${d.tva}" style="width:72px" title="Laisse vide pour la TVA générale du client">`;
   let det='<p class="mut">Ajoute un produit pour commencer.</p>';
   if(z&&R&&isFormule(R)){
@@ -878,7 +910,7 @@ function vFiches(){
   <div class="split"><div class="card">${modeSel}<div class="sec"><h3>Carte</h3><span class="small mut">ratio réel estimé</span></div><div class="pz">${list||'<p class="small mut">Aucun produit.</p>'}</div><div class="row" style="margin-top:10px"><button class="g" id="radd">Ajouter un produit</button><button class="g" id="rfadd">Ajouter une formule</button></div></div><div class="card">${det}</div></div>
   <div class="card"><div class="sec"><h3>Ratio par catégorie</h3><span class="small mut">${mlab(period)}</span></div>${catTable(r,c)}</div>
   <div class="card"><h3>Tableau de synthèse</h3><div class="tw"><table><thead><tr><th>Produit</th><th>Catégorie</th><th class="n">Prix HT</th><th class="n">Coût théorique</th><th class="n">Coût réel estimé</th><th class="n">Marge</th><th class="n">Ratio réel</th><th class="n">Écart à la cible</th><th>Alerte</th></tr></thead><tbody>
-  ${Object.values(r.pizzas).map(p=>{const e=p.ratioR-c.val;return `<tr><td>${esc(p.nom)}</td><td>${esc(p.cat)}</td><td class="n">${fmt(p.ht)}</td><td class="n">${fmt(p.cost)}</td><td class="n">${fmt(p.costR)}</td><td class="n">${fmt(p.ht-p.costR)}</td><td class="n">${pc(p.ratioR)}</td><td class="n ${e>0?'bad':'good'}">${e>0?'+':''}${fmt(e,1)} pt</td><td>${e>0?pill('bd','Au-dessus de la cible'):pill('ok','Dans la cible')}</td></tr>`}).join('')}</tbody></table></div></div>`
+  ${Object.values(r.pizzas).map(p=>{const e=p.ratioR-c.val,nf=!p.formule&&!p.raw.length;if(nf)return `<tr><td>${esc(p.nom)}</td><td>${esc(p.cat)}</td><td class="n">${fmt(p.ht)}</td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td class="n">–</td><td>${pill('bd','Sans fiche : coût inconnu')}</td></tr>`;return `<tr><td>${esc(p.nom)}</td><td>${esc(p.cat)}</td><td class="n">${fmt(p.ht)}</td><td class="n">${fmt(p.cost)}</td><td class="n">${fmt(p.costR)}</td><td class="n">${fmt(p.ht-p.costR)}</td><td class="n">${pc(p.ratioR)}</td><td class="n ${e>0?'bad':'good'}">${e>0?'+':''}${fmt(e,1)} pt</td><td>${e>0?pill('bd','Au-dessus de la cible'):pill('ok','Dans la cible')}</td></tr>`}).join('')}</tbody></table></div></div>`
 }
 
 let invM=null;
@@ -991,6 +1023,8 @@ function vDonnees(){
   <div class="card"><div class="sec"><h3>Ingrédients et prix de référence</h3><button class="g" id="iadd">Ajouter un ingrédient</button></div><div class="tw"><table><thead><tr><th>Ingrédient</th><th>Unité fournisseur</th><th class="n">Contenu utile (g, ml, pièces)</th><th class="n">Prix HT / unité</th><th class="n">Rendement %</th><th class="n">Coût net / kg</th><th>Hors ratio</th><th></th></tr></thead><tbody>
   ${d.ings.map(i=>`<tr><td><input class="w" data-i="${i.id}" data-f="nom" value="${esc(i.nom)}">${i.prov?'<div class="ex">Prix à compléter : dépose une facture</div>':''}${ingFlags(i).map(t=>`<div class="ex">${esc(t)}</div>`).join('')}</td><td><input style="width:80px" data-i="${i.id}" data-f="unite" value="${esc(i.unite)}"></td><td class="n"><input class="n" type="number" data-i="${i.id}" data-f="g" value="${i.g}"></td><td class="n"><input class="n" type="number" step="0.01" data-i="${i.id}" data-f="prix" value="${i.prix}"></td><td class="n"><input class="n" type="number" data-i="${i.id}" data-f="rend" value="${Math.round((i.rend||1)*100)}"></td><td class="n">${fmt(i.prix/(i.g*(i.rend||1))*1000)} €</td><td><input type="checkbox" data-i="${i.id}" data-f="hr" ${i.hr?'checked':''} aria-label="${esc(i.nom)} hors ratio"></td><td><button class="x" data-idel="${i.id}">Supprimer</button></td></tr>`).join('')}
   </tbody></table></div><p class="small mut">Le rendement s'applique au poids brut (pommes de terre à éplucher 80 %, poireaux 60 %, oignons 90 %). Pour un produit égoutté, saisis le poids égoutté comme contenu. Ne divise jamais le prix par la quantité commandée.</p><p class="small mut">Hors ratio : article acheté mais qui n'est pas de l'alimentaire servi dans les plats (boissons, produits d'entretien, consommables). Il reste visible sur les factures mais n'est compté ni dans le ratio matière ni dans les écarts. Les desserts et leurs ingrédients restent dans le ratio.</p><p class="ex" id="ierr"></p></div>
+  ${(()=>{const A=d.alias||{},rows=[...Object.entries(A.ing||{}).map(([k,v])=>['ing',k,(d.ings.find(i=>i.id===v)||{}).nom||'?','Ingrédient']),...Object.entries(A.prod||{}).map(([k,v])=>['prod',k,v,'Produit'])];
+    return `<div class="card"><div class="sec"><h3>Libellés mémorisés</h3><span class="small mut">${rows.length} libellé(s)</span></div>${rows.length?`<div class="tw"><table><thead><tr><th>Libellé lu (facture ou Z)</th><th>Associé à</th><th>Type</th><th></th></tr></thead><tbody>${rows.map(([kind,k,v,t])=>`<tr><td>${esc(k)}</td><td>${esc(v)}</td><td>${t}</td><td><button class="x" data-aldel="${kind}|${esc(k)}">Oublier</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="small mut">Aucun pour l\'instant.</p>'}<p class="small mut">Quand tu valides un document lu, chaque libellé que tu as associé à un ingrédient ou à un produit est retenu : la fois suivante, il est reconnu tout seul, à la lecture automatique comme au copier-coller. Oublie un libellé s'il a été mal associé.</p></div>`})()}
   <div class="grid2"><div class="card"><div class="sec"><h3>Réglages du client</h3></div><div class="list">
    <div><label class="small mut" for="s_nom">Nom du client</label><br><input class="w" id="s_nom" value="${esc(d.nom)}"></div>
    <div class="row"><label for="s_tva">TVA vente (%)</label><input class="n" id="s_tva" type="number" step="0.5" value="${d.tva}"></div>
@@ -998,7 +1032,7 @@ function vDonnees(){
    <div class="row"><label for="s_perte">Pertes ordinaires (%)</label><input class="n" id="s_perte" type="number" value="${d.perte}"></div>
    <div class="row"><label for="s_vol">Volume minimum pour conclure (g)</label><input class="n" id="s_vol" type="number" value="${d.volmin}"></div></div></div>
   <div class="card"><div class="sec"><h3>Mon activité</h3></div><p class="small mut">Affiché en en-tête du bilan PDF.</p><div class="list"><div><label class="small mut" for="pro_nom">Nom de l'activité</label><br><input class="w" id="pro_nom" value="${esc((S.pro||{}).nom||'')}"></div><div><label class="small mut" for="pro_ct">Coordonnées (téléphone, e-mail)</label><br><input class="w" id="pro_ct" value="${esc((S.pro||{}).ct||'')}"></div></div></div>
-  <div class="card"><div class="sec"><h3>Sauvegarde</h3></div><p class="small mut">Les données sont gardées dans ce navigateur${inClaude()?'':' (sur cet ordinateur uniquement : si tu effaces les données du navigateur, elles disparaissent)'}${dbDoc?' et dans ton espace privé de la page, visible de toi seul':''}. Enregistre régulièrement une sauvegarde dans un fichier et garde-la ailleurs (clé USB, Drive, e-mail).</p>${syncErr?`<div class="note" style="margin-bottom:8px"><b>Sauvegarde en ligne impossible</b> (${esc(syncErr)}). Tes données restent dans ce navigateur mais ne sont plus copiées en ligne, souvent parce qu'elles dépassent 256 Ko. Copie la sauvegarde ci-dessous et garde-la ailleurs, ou supprime un client que tu ne suis plus.</div>`:''}
+  <div class="card"><div class="sec"><h3>Sauvegarde</h3></div><p class="small mut">Les données sont gardées dans ce navigateur${inClaude()?'':' (sur cet ordinateur uniquement : si tu effaces les données du navigateur, elles disparaissent)'}${dbBase?' et dans ton espace privé de la page, visible de toi seul':''}. Enregistre régulièrement une sauvegarde dans un fichier et garde-la ailleurs (clé USB, Drive, e-mail).</p>${syncErr?`<div class="note" style="margin-bottom:8px"><b>Sauvegarde en ligne impossible</b> (${esc(syncErr)}). Tes données restent dans ce navigateur mais ne sont plus copiées en ligne. Si l'erreur parle de quota, l'espace en ligne est plein : supprime un client que tu ne suis plus. Enregistre en attendant la sauvegarde dans un fichier.</div>`:''}
    <div class="row"><button id="savef">Enregistrer la sauvegarde dans un fichier</button><button class="g" id="openf">Ouvrir un fichier de sauvegarde</button><input type="file" id="impf" accept=".json,application/json" hidden></div>
    <p class="small mut" style="margin:6px 0 12px"><span id="bkinfo">${S.lastBackup?'Dernier fichier de sauvegarde : '+new Date(S.lastBackup).toLocaleString('fr-FR')+'.':'Aucun fichier de sauvegarde enregistré pour l\'instant.'}</span> Le fichier contient tous les clients et sert aussi à passer de la version PC à la version Claude.</p>
    <details><summary class="small mut" style="cursor:pointer">Sauvegarde par copier-coller</summary>
@@ -1207,7 +1241,7 @@ Préparations de base connues (id | nom) : ${(d.preps||[]).length?d.preps.map(p=
 Produits et formules de la carte connus : ${d.recs.length?d.recs.map(r=>r.nom).join(', '):'(aucun pour l\'instant)'}
 Catégories de la carte : ${catList(d).join(', ')||'(aucune)'}
 Format : {"documents":[{"type":"achat" ou "vente" ou "inconnu","date":"AAAA-MM-JJ" ou null,"ref":"numéro de facture ou titre","fourn":"nom du fournisseur","total_ht":nombre ou null,"lignes":[{"libelle":"texte lu","ingredient_id":"id connu ou null","produit":"nom exact d'un produit ou d'une formule connus, ou null","quantite":nombre,"montant_ht":nombre ou null,"nom_ingredient":"nom court de l'ingrédient (ex. Mozzarella râpée)","unite":"unité de facturation (carton, kg, sac, boîte, seau, bidon…)","contenu_par_unite":nombre de g, ml ou pièces utilisables par unité, déduit de la désignation (carton de 4 sachets de 2,5 kg = 10000 ; kg vendu au poids réel = 1000 ; carton de 100 boîtes = 100) ou null,"tva":taux en % ou null,"hors_ratio":true si l'article n'est pas alimentaire ou n'entre pas dans les plats (boisson, produit d'entretien, matériel), sinon false}]}]}
-Règles : renvoie un document par facture (un fichier peut en contenir plusieurs), et un document de type vente par mois pour un relevé de ventes couvrant plusieurs mois (date = dernier jour du mois). Une facture fournisseur est de type achat. La quantité est le nombre d'unités facturées (cartons, sacs, boîtes, seaux, ou kilos pour un produit vendu au poids réel). montant_ht est le total HT de la ligne, jamais le prix unitaire ni un montant TTC. Ignore port, remise globale, TVA et totaux. Un rapport de caisse ou de ventes est de type vente : quantité vendue par produit alimentaire de la carte (entrées, plats, desserts, pizzas, formules et menus), ignore les boissons (softs, alcools, cafés, thés) ; ajoute au document "couverts":nombre de couverts ou de clients du mois si le document l'indique, sinon null. Une fiche de cadrage (charges mensuelles du patron) est de type cadrage, sans lignes, avec "cadrage":{"personnel":nombre,"loyer":nombre,"energie":nombre,"autres":nombre,"emprunt":nombre ou null,"remuneration":nombre} en euros par mois (remuneration = ce que le patron veut se verser). Une carte (liste de plats avec prix TTC, sans les boissons), des recettes ou une fiche de pesée sont de type recettes, avec "produits":[{"nom":"nom du produit","categorie":"rubrique de la carte (Entrées, Plats, Desserts, Pizzas…) ou null","prix_ttc":nombre ou null,"a_la_carte_depuis":"AAAA-MM-JJ" ou null (date de mise à la carte si le document la donne),"lignes":[{"libelle":"texte lu","ingredient_id":"id d'un ingrédient ou d'une préparation connus, ou null","declare":grammage déclaré ou null,"pese":grammage pesé ou null}]}] et sans clé lignes au niveau du document ; une carte sans composition donne des produits avec lignes vides ; ignore les formules et menus à prix fixe dans une carte (ils se créent à part) ; mets pese à null si la pesée n'a pas été faite ; les grammages sont en g, ml ou pièces comme dans le document. Un index ou récapitulatif de factures (une ligne par facture : numéro, date, fournisseur, total HT, sans le détail des lignes) est de type index, sans lignes, avec "factures":[{"ref":"numéro de facture","date":"AAAA-MM-JJ","fourn":"fournisseur","total_ht":nombre ou null}]. Si le fichier est autre chose, renvoie {"documents":[]}. Pour un achat, remplis toujours nom_ingredient, unite, contenu_par_unite et tva à partir de la facture, même si l'ingrédient n'est pas dans la liste connue (ingredient_id est alors null). Pour les autres champs, ne devine pas : mets null si aucun ingrédient ou aucun produit connu ne correspond clairement. Format de date ISO.
+Règles : renvoie un document par facture (un fichier peut en contenir plusieurs), et un document de type vente par mois pour un relevé de ventes couvrant plusieurs mois (date = dernier jour du mois). Une facture fournisseur est de type achat. La quantité est le nombre d'unités facturées (cartons, sacs, boîtes, seaux, ou kilos pour un produit vendu au poids réel). montant_ht est le total HT de la ligne, jamais le prix unitaire ni un montant TTC. Ignore port, remise globale, TVA et totaux. Un rapport de caisse ou de ventes est de type vente : quantité vendue par produit alimentaire de la carte (entrées, plats, desserts, pizzas, formules et menus), ignore les boissons (softs, alcools, cafés, thés) ; si le relevé détaille sous une formule ou un menu les plats choisis (souvent à 0 € ou en retrait), compte seulement la formule et ignore ces lignes de détail, sinon les plats seraient comptés deux fois ; ajoute au document "couverts":nombre de couverts ou de clients du mois si le document l'indique, sinon null. Une fiche de cadrage (charges mensuelles du patron) est de type cadrage, sans lignes, avec "cadrage":{"personnel":nombre,"loyer":nombre,"energie":nombre,"autres":nombre,"emprunt":nombre ou null,"remuneration":nombre} en euros par mois (remuneration = ce que le patron veut se verser). Une carte (liste de plats avec prix TTC, sans les boissons), des recettes ou une fiche de pesée sont de type recettes, avec "produits":[{"nom":"nom du produit","categorie":"rubrique de la carte (Entrées, Plats, Desserts, Pizzas…) ou null","prix_ttc":nombre ou null,"a_la_carte_depuis":"AAAA-MM-JJ" ou null (date de mise à la carte si le document la donne),"lignes":[{"libelle":"texte lu","ingredient_id":"id d'un ingrédient ou d'une préparation connus, ou null","declare":grammage déclaré ou null,"pese":grammage pesé ou null}]}] et sans clé lignes au niveau du document ; une carte sans composition donne des produits avec lignes vides ; ignore les formules et menus à prix fixe dans une carte (ils se créent à part) ; mets pese à null si la pesée n'a pas été faite ; les grammages sont en g, ml ou pièces comme dans le document. Un index ou récapitulatif de factures (une ligne par facture : numéro, date, fournisseur, total HT, sans le détail des lignes) est de type index, sans lignes, avec "factures":[{"ref":"numéro de facture","date":"AAAA-MM-JJ","fourn":"fournisseur","total_ht":nombre ou null}]. Si le fichier est autre chose, renvoie {"documents":[]}. Pour un achat, remplis toujours nom_ingredient, unite, contenu_par_unite et tva à partir de la facture, même si l'ingrédient n'est pas dans la liste connue (ingredient_id est alors null). Pour les autres champs, ne devine pas : mets null si aucun ingrédient ou aucun produit connu ne correspond clairement. Format de date ISO.
 ${text?'Texte du document :\n'+text:'Le document est fourni en image.'}`;
   const o=await sample.json(prompt,{images:images.length?images:undefined,modelTier:'default',cache:false});
   const docs=Array.isArray(o)?o:(Array.isArray(o.documents)?o.documents:(o.lignes?[o]:[]));
@@ -1220,8 +1254,8 @@ ${text?'Texte du document :\n'+text:'Le document est fourni en image.'}`;
     let type=o.type,note='';
     if(type!=='achat'&&type!=='vente'){type=lg.some(l=>l.montant_ht!=null)?'achat':'vente';note='Type de document incertain, vérifie-le.'}
     const lines=lg.map(l=>{const lab=String(l.libelle||'');const nm=String(l.nom_ingredient||'').trim();
-      const i=d.ings.find(z=>z.id===l.ingredient_id)||(type==='achat'?(findIng(d,nm||lab)||findIng(d,lab)):null);
-      const p=d.recs.find(r=>r.nom===(l.produit||l.pizza))||(type==='vente'?findPz(d,lab):null);
+      const i=(type==='achat'?aliasIng(d,lab):null)||d.ings.find(z=>z.id===l.ingredient_id)||(type==='achat'?(findIng(d,nm||lab)||findIng(d,lab)):null);
+      const p=(type==='vente'?aliasPz(d,lab):null)||d.recs.find(r=>r.nom===(l.produit||l.pizza))||(type==='vente'?findPz(d,lab):null);
       const nw={nom:nm||lab,unite:String(l.unite||'unité'),g:+l.contenu_par_unite||1000,tva:+l.tva||5.5,rendp:rendSuggest(nm||lab),hr:l.hors_ratio===true||hrSuggest(nm||lab)};
       return {label:lab,q:+l.quantite||0,ht:l.montant_ht!=null?+l.montant_ht:0,i:i?i.id:(type==='achat'&&lab?'__new':''),p:p?p.nom:(type==='vente'&&lab?'__new':''),nw,pnom:lab}});
     out.push({doc:{type,date:/^\d{4}-\d{2}-\d{2}$/.test(o.date||'')?o.date:'',ref:o.ref||'',fourn:o.fourn||'',total:o.total_ht!=null?+o.total_ht:null,couv:type==='vente'&&+o.couverts>0?Math.round(+o.couverts):null,lines},note})});
@@ -1285,6 +1319,9 @@ function qualite(d){
   mo.forEach(m=>{const hasV=!!vm[m],hasA=d.docs.some(x=>x.type==='achat'&&x.date.slice(0,7)===m);if(hasV&&!hasA)o.push({lvl:'wn',txt:`${mlab(m)} : ventes reçues mais aucune facture.`});if(!hasV&&hasA)o.push({lvl:'wn',txt:`${mlab(m)} : factures reçues mais aucun relevé de ventes.`})});
   const tm=Object.entries(vm).map(([m,a])=>a.length?[m,a[0].l.reduce((u,l)=>u+(+l.q||0),0)]:null).filter(Boolean);
   if(tm.length>=3){const md=tm.map(x=>x[1]).sort((a,b)=>a-b)[Math.floor(tm.length/2)];tm.forEach(([m,v])=>{if(v>md*1.5||v<md*0.6)o.push({lvl:'wn',txt:`${mlab(m)} : ${fmt(v,0)} produits vendus, très loin de la médiane (${fmt(md,0)}).`})})}
+  /* un client prend rarement plus d'une portion d'une même catégorie : au-delà de 1,15 par couvert, les plats des formules sont probablement aussi listés sur le Z */
+  mo.forEach(m=>{const cv=d.couv&&+d.couv[m];if(!(cv>0)||!vm[m])return;const r=calc(d,m);
+    const trop=Object.values(r.cats).filter(o=>o.q>cv*1.15);if(trop.length)o.push({lvl:'bd',txt:`${mlab(m)} : ${trop.map(x=>fmt(x.q,0)+' '+x.cat.toLowerCase()).join(', ')} vendus pour ${fmt(cv,0)} couverts. Plus d'une portion par client : les plats choisis dans les formules sont sans doute comptés deux fois (une fois dans la formule, une fois seuls). Si le Z les liste sous la formule, retire-les du relevé de ventes.`})});
   const ns=d.ings.map(i=>[i,normS(i.nom)]);
   for(let a=0;a<ns.length;a++)for(let b=a+1;b<ns.length;b++){const x=ns[a][1],y=ns[b][1];if(x&&y&&(x===y||x.startsWith(y)||y.startsWith(x)))o.push({lvl:'wn',txt:`Doublon probable dans les ingrédients : « ${ns[a][0].nom} » et « ${ns[b][0].nom} ». Fusionne-les.`})}
   const im=ingMap(d),used=new Set([...d.recs.flatMap(r=>rawLines(d,r.l||[],im).map(x=>x.i)),...(d.preps||[]).flatMap(p=>rawLines(d,p.l,im).map(x=>x.i))]);
@@ -1395,6 +1432,11 @@ function parseNum(s){return parseFloat(String(s).replace(/\s/g,'').replace(',','
 const normS=s=>norm(s).split(' ').map(w=>w.length>3?w.replace(/s$/,''):w).join(' ');
 function findIng(d,n){const k=normS(n);if(!k)return null;return d.ings.find(i=>normS(i.nom)===k)||d.ings.find(i=>{const a=normS(i.nom);return a.startsWith(k)||k.startsWith(a)})}
 function findPz(d,n){const k=normS(n);return d.recs.find(r=>normS(r.nom)===k)}
+/* Libellés mémorisés : un libellé de facture ou de Z associé une fois à un ingrédient ou à un produit est reconnu ensuite.
+   d.alias = {ing:{libellé normalisé: id ingrédient}, prod:{libellé normalisé: nom du produit}} */
+function aliasIng(d,lab){const k=norm(lab||''),id=k&&d.alias&&d.alias.ing&&d.alias.ing[k];return id?d.ings.find(i=>i.id===id)||null:null}
+function aliasPz(d,lab){const k=norm(lab||''),n=k&&d.alias&&d.alias.prod&&d.alias.prod[k];return n?d.recs.find(r=>r.nom===n)||null:null}
+function remember(d,kind,lab,v){const k=norm(lab||'');if(!k||!v)return;const auto=kind==='ing'?(findIng(d,lab)||{}).id:(findPz(d,lab)||{}).nom;if(auto===v)return;d.alias=d.alias||{};(d.alias[kind]=d.alias[kind]||{})[k]=v}
 function findPrep(d,n){const k=normS(n);return k?(d.preps||[]).find(p=>normS(p.nom)===k):null}
 
 document.addEventListener('click',e=>{
@@ -1411,7 +1453,7 @@ document.addEventListener('click',e=>{
       if(p.lines.some(l=>!l.i||!(l.g>0))){x.err='Complète l\'ingrédient et le grammage de chaque ligne ('+p.nom+').';return render()}}
     drafts=drafts.filter(z=>z.id!==x.id);
     return change(()=>{const getI=l=>{if(l.i!=='__new')return l.i;const e=findIng(d,l.label);if(e)return e.id;const n={id:uid(),nom:l.label,unite:'kg',g:1000,prix:0,rend:1,tva:5.5,prov:true};d.ings.push(n);return n.id};ps.forEach(p=>{let ex=findPz(d,p.nom);const cat=(p.cat||'').trim();if(cat){d.cats=d.cats||[];if(!d.cats.includes(cat))d.cats.push(cat)}if(!ex){ex={nom:p.nom,cat:cat||'À classer',ttc:p.ttc,l:[]};d.recs.push(ex)}else if(cat&&!isFormule(ex))ex.cat=cat
-      if(p.ttc>0){logPrix(d,ex.nom,ex.ttc,p.ttc);ex.ttc=p.ttc}if(p.since)ex.since=p.since;if(p.lines.length&&!isFormule(ex)){figeTout(d,ex.nom);ex.l=p.lines.map(l=>{const o={i:getI(l),g:+l.g};if(l.pes>0)o.pes=+l.pes;return o})}})},()=>'Fiches techniques mises à jour ('+ps.length+' produit'+(ps.length>1?'s':'')+'). Tous les coûts et ratios sont recalculés.')}
+      if(p.ttc>0){logPrix(d,ex.nom,ex.ttc,p.ttc);ex.ttc=p.ttc}if(p.since)ex.since=p.since;if(p.lines.length&&!isFormule(ex)){figeTout(d,ex.nom);ex.l=p.lines.map(l=>{const o={i:getI(l),g:+l.g};if(l.pes>0)o.pes=+l.pes;if(d.ings.some(i=>i.id===o.i))remember(d,'ing',l.label,o.i);return o})}})},()=>'Fiches techniques mises à jour ('+ps.length+' produit'+(ps.length>1?'s':'')+'). Tous les coûts et ratios sont recalculés.')}
   if(t.dataset.drixok){const x=drafts.find(z=>z.id===t.dataset.drixok);drafts=drafts.filter(z=>z.id!==x.id);return change(()=>{d.index=x.doc.factures.map(f=>({...f}))},()=>{const c=controle(d);return `Index enregistré : ${c.rows.length} factures attendues, ${c.ok} reçues et conformes, ${c.missing} manquantes, ${c.diff} avec un total différent.`})}
   if(t.dataset.drcadok){const x=drafts.find(z=>z.id===t.dataset.drcadok);drafts=drafts.filter(z=>z.id!==x.id);return change(()=>{d.cad=Object.assign({},d.cad,x.doc.cad)},(b,a)=>`Cadrage mis à jour. Cible de ratio : <b>${pc(a.c)}</b> (avant : ${pc(b.c)}).`)}
   if(t.dataset.drx){drafts=drafts.filter(z=>z.id!==t.dataset.drx);return render()}
@@ -1430,13 +1472,13 @@ document.addEventListener('click',e=>{
       if(isA){const out=[];
         okL.forEach(l=>{let id=l.i;const nw=l.nw||{};
           if(id==='__new'){const ex=findIng(d,nw.nom);if(ex)id=ex.id;else{const n={id:uid(),nom:nw.nom,unite:nw.unite||'unité',g:+nw.g||1,prix:l.q?l.ht/l.q:0,rend:Math.min(1,(+nw.rendp||100)/100),tva:+nw.tva||5.5};if(nw.hr)n.hr=true;if(/bo[iî]te/i.test(n.nom))n.pc=true;d.ings.push(n);id=n.id;created++}}
-          out.push({i:id,q:+l.q,ht:+l.ht,nw})});
+          out.push({i:id,q:+l.q,ht:+l.ht,nw});remember(d,'ing',l.label,id)});
         out.forEach(l=>{const i=d.ings.find(z=>z.id===l.i);if(!i)return;
           if(i.prov){delete i.prov;if(l.nw.unite)i.unite=l.nw.unite;if(+l.nw.g>0)i.g=+l.nw.g;if(+l.nw.tva)i.tva=+l.nw.tva;if(+l.nw.rendp&&+l.nw.rendp<100)i.rend=+l.nw.rendp/100}
           const later=d.docs.some(o=>o.type==='achat'&&o.date>k.date&&o.l.some(z=>z.i===i.id));
           if(!later&&l.q>0)i.prix=Math.round(l.ht/l.q*100)/100});
         d.docs.push({id:uid(),type:'achat',date:k.date,ref:k.ref||'Facture',fourn:k.fourn||'Fournisseur',l:out.map(l=>({i:l.i,q:l.q,ht:l.ht}))})}
-      else{const out=okL.map(l=>{let p=l.p;if(p==='__new'){const ex=findPz(d,l.pnom);if(ex)p=ex.nom;else{d.recs.push({nom:l.pnom,cat:'À classer',ttc:0,l:[]});p=l.pnom;created++}}return {p,q:+l.q}});
+      else{const out=okL.map(l=>{let p=l.p;if(p==='__new'){const ex=findPz(d,l.pnom);if(ex)p=ex.nom;else{d.recs.push({nom:l.pnom,cat:'À classer',ttc:0,l:[]});p=l.pnom;created++}}remember(d,'prod',l.label,p);return {p,q:+l.q}});
         d.docs.push({id:uid(),type:'vente',date:k.date,ref:k.ref||'Rapport de ventes',fourn:'Caisse',l:stampPu(d,out)});if(+k.couv>0){d.couv=d.couv||{};d.couv[k.date.slice(0,7)]=Math.round(+k.couv)}}
     },(b,a)=>docMsg(k.date)(b,a)+(created?' '+created+(isA?' ingrédient(s) ajouté(s) à la liste.':' produit(s) créé(s) dans « À classer », sans recette : dépose la carte et les recettes, ou complète les fiches.'):''))}
   if(t.dataset.per){period=t.dataset.per;banner=null;return render()}
@@ -1463,17 +1505,18 @@ document.addEventListener('click',e=>{
     return change(()=>{d.docs.push({id:uid(),type:'vente',date,ref:$('#vr').value||'Rapport de ventes',fourn:'Caisse',l:stampPu(d,l)});if(cv>0){d.couv=d.couv||{};d.couv[date.slice(0,7)]=Math.round(cv)}},docMsg(date))}
   if(t.id==='cfb'||t.id==='cvb'){const isF=t.id==='cfb',txt=$(isF?'#cf':'#cv').value.trim(),date=$(isF?'#cfd':'#cvd').value;const bad=[],l=[];
     txt.split(/\n+/).filter(x=>x.trim()).forEach((ln,k)=>{const p=ln.split(/[;\t]/).length>1?ln.split(/[;\t]/):ln.split(',');
-      if(isF){const i=findIng(d,p[0]),q=parseNum(p[1]),h=parseNum(p[2]);if(!i||!(q>0)||isNaN(h))bad.push(k+1);else l.push({i:i.id,q,ht:h})}
-      else{const z=findPz(d,p[0]),q=parseNum(p[1]);if(!z||!(q>0))bad.push(k+1);else l.push({p:z.nom,q})}});
+      if(isF){const i=aliasIng(d,p[0])||findIng(d,p[0]),q=parseNum(p[1]),h=parseNum(p[2]);if(!i||!(q>0)||isNaN(h))bad.push(k+1);else l.push({i:i.id,q,ht:h})}
+      else{const z=aliasPz(d,p[0])||findPz(d,p[0]),q=parseNum(p[1]);if(!z||!(q>0))bad.push(k+1);else l.push({p:z.nom,q})}});
     if(bad.length||!l.length||!date){$('#cerr').textContent=!l.length&&!bad.length?'Rien à importer.':'Lignes non reconnues : '+bad.join(', ')+'. Vérifie le nom (comme dans Ingrédients ou Fiches) et les nombres.';return}
     return change(()=>d.docs.push(isF?{id:uid(),type:'achat',date,ref:'Import',fourn:$('#cff').value||'Import',l}:{id:uid(),type:'vente',date,ref:'Import ventes',fourn:'Caisse',l:stampPu(d,l)}),docMsg(date))}
   if(t.id==='radd')return change(()=>{let n='Nouveau produit '+(d.recs.length+1);while(d.recs.some(x=>x.nom===n))n+=' bis';const cur=d.recs.find(x=>x.nom===rec);d.recs.push({nom:n,cat:(cur&&!isFormule(cur)&&cur.cat)||catList(d)[0]||'Plats',ttc:10,l:[]});rec=n});
+  if(t.dataset.aldel){const [kind,k]=t.dataset.aldel.split('|');return change(()=>{if(d.alias&&d.alias[kind])delete d.alias[kind][k]},()=>'Libellé oublié : il sera de nouveau proposé à la vérification.')}
   if(t.id==='rdel'){if(t.dataset.arm!=='1'){const nv=d.docs.filter(x=>x.type==='vente'&&x.l.some(l=>l.p===rec)).length;t.dataset.arm='1';t.textContent=nv?'Confirmer : '+nv+' relevé(s) de ventes le mentionnent, ils sortiront des calculs':'Confirmer la suppression';return}figeTout(d,rec);return change(()=>{d.recs=d.recs.filter(r=>r.nom!==rec);d.recs.forEach(f=>{if(isFormule(f))(f.slots||[]).forEach(s=>{if(s.choix)s.choix=s.choix.filter(n=>n!==rec)})});rec=null})}
   if(t.id==='ladd')return change(()=>{if(d.ings[0])editRecette(d,rec,r=>r.l.push({i:d.ings[0].id,g:0}))});
   if(t.dataset.lx!=null)return change(()=>editRecette(d,rec,r=>r.l.splice(+t.dataset.lx,1)));
   if(t.id==='rpast')return change(()=>d.docs.forEach(x=>{if(x.type==='vente')x.l.forEach(l=>{if(l.p===rec)delete l.rl})}),()=>`Composition actuelle de ${esc(rec)} appliquée à toutes les ventes passées. Ratios théoriques et écarts recalculés.`);
   if(t.id==='iadd')return change(()=>d.ings.push({id:uid(),nom:'Nouvel ingrédient',unite:'kg',g:1000,prix:1,rend:1,tva:5.5}));
-  if(t.dataset.idel){const used=d.recs.some(r=>(r.l||[]).some(l=>l.i===t.dataset.idel))||(d.preps||[]).some(p=>p.l.some(l=>l.i===t.dataset.idel))||d.docs.some(x=>x.l.some(l=>l.i===t.dataset.idel))||Object.values(d.inv||{}).some(v=>v[t.dataset.idel]);if(used){$('#ierr').textContent='Cet ingrédient est utilisé dans une recette, une préparation, une facture ou un inventaire. Retire-le d\'abord de ces endroits.';return}return change(()=>d.ings=d.ings.filter(i=>i.id!==t.dataset.idel))}
+  if(t.dataset.idel){const used=d.recs.some(r=>(r.l||[]).some(l=>l.i===t.dataset.idel))||(d.preps||[]).some(p=>p.l.some(l=>l.i===t.dataset.idel))||d.docs.some(x=>x.l.some(l=>l.i===t.dataset.idel))||Object.values(d.inv||{}).some(v=>v[t.dataset.idel]);if(used){$('#ierr').textContent='Cet ingrédient est utilisé dans une recette, une préparation, une facture ou un inventaire. Retire-le d\'abord de ces endroits.';return}return change(()=>{d.ings=d.ings.filter(i=>i.id!==t.dataset.idel);if(d.alias&&d.alias.ing)Object.keys(d.alias.ing).forEach(k=>{if(d.alias.ing[k]===t.dataset.idel)delete d.alias.ing[k]})})}
   if(t.id==='apply')return change(()=>{d.recs.forEach(r=>{if(d.sim[r.nom]!=null){logPrix(d,r.nom,r.ttc,+d.sim[r.nom]);r.ttc=+d.sim[r.nom]}});d.sim={}},()=>'Nouveaux prix appliqués à la carte. Tous les ratios sont recalculés.');
   if(t.id==='reset')return change(()=>d.sim={});
   if(t.id==='pdf'){t.textContent='Création du PDF…';makePdf().then(m=>{t.textContent=m}).catch(()=>{t.textContent='PDF impossible ici'});return}
@@ -1506,7 +1549,7 @@ document.addEventListener('change',e=>{
   if(t.id==='cl'){drafts=[];S.cur=t.value;period='all';rec=null;banner=null;save();return render()}
   if(t.dataset.f){const i=d.ings.find(x=>x.id===t.dataset.i);let v=t.value;if(t.dataset.f==='hr')v=t.checked;else if(t.dataset.f==='nom'||t.dataset.f==='unite'){if(!v.trim())return render()}else{v=parseNum(v);if(!(v>0))return render();if(t.dataset.f==='rend')v=Math.min(v,100)/100}
     return change(()=>i[t.dataset.f]=v,(b,a)=>{const x=b.m[b.m.length-1],y=a.m[a.m.length-1];return x&&y&&x[1]!=null&&y[1]!=null?`Ingrédient modifié. Ratio réel de ${mlab(y[0])} : ${pc(x[1])} → <b>${pc(y[1])}</b>.`:'Ingrédient modifié.'})}
-  if(t.id==='rn'){const v=t.value.trim();if(!v||d.recs.some(r=>r.nom===v))return render();return change(()=>{const r=d.recs.find(r=>r.nom===rec),old=r.nom;d.docs.forEach(x=>x.l.forEach(l=>{if(l.p===old)l.p=v}));d.recs.forEach(f=>{if(isFormule(f))(f.slots||[]).forEach(s=>{if(s.choix)s.choix=s.choix.map(n=>n===old?v:n)})});if(d.sim&&d.sim[old]!=null){d.sim[v]=d.sim[old];delete d.sim[old]}r.nom=v;rec=v})}
+  if(t.id==='rn'){const v=t.value.trim();if(!v||d.recs.some(r=>r.nom===v))return render();return change(()=>{const r=d.recs.find(r=>r.nom===rec),old=r.nom;d.docs.forEach(x=>x.l.forEach(l=>{if(l.p===old)l.p=v}));d.recs.forEach(f=>{if(isFormule(f))(f.slots||[]).forEach(s=>{if(s.choix)s.choix=s.choix.map(n=>n===old?v:n)})});if(d.sim&&d.sim[old]!=null){d.sim[v]=d.sim[old];delete d.sim[old]}if(d.alias&&d.alias.prod)Object.keys(d.alias.prod).forEach(k=>{if(d.alias.prod[k]===old)d.alias.prod[k]=v});r.nom=v;rec=v})}
   if(t.id==='rc'){const v=t.value.trim();if(!v)return render();return change(()=>{const r=d.recs.find(r=>r.nom===rec);r.cat=v;d.cats=d.cats||[];if(!d.cats.includes(v))d.cats.push(v)})}
   if(t.id==='rt')return change(()=>{const r=d.recs.find(r=>r.nom===rec);const v=t.value.trim();if(v==='')delete r.tva;else{const n=parseNum(v);if(n>=0&&n<=30)r.tva=n}});
   if(t.id==='prn'){const v=t.value.trim();if(!v)return render();return change(()=>{prepOf(d,prepSel).nom=v})}
